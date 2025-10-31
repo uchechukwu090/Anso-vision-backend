@@ -1,0 +1,5 @@
+filterpy
+hmmlearn
+PyWavelets
+numpy
+scipy
