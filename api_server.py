@@ -1,3 +1,4 @@
+import os
 from flask import Flask, request, jsonify
 import numpy as np
 from kalman_filter import apply_kalman_filter
@@ -126,6 +127,6 @@ def execute_signal():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
-if __name__ == '__main__':
-    print("🚀 Backend API starting on http://localhost:5000")
-    app.run(debug=True, port=5000)
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
