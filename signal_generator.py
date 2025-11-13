@@ -2,12 +2,14 @@ import numpy as np
 from kalman_filter import apply_kalman_filter
 from hmm_model import MarketHMM
 from wavelet_analysis import apply_wavelet_decomposition, denoise_signal_with_wavelets
+from monte_carlo_optimizer import MonteCarloOptimizer
 
 class SignalGenerator:
-    def __init__(self, n_hmm_components=3, wavelet_level=4, covariance_type='diag', random_state=None):
+    def __init__(self, n_hmm_components=3, wavelet_level=4, covariance_type='diag', random_state=None, n_monte_carlo_sims=10000):
         self.kalman_filter = None  # Kalman filter will be initialized with data
         self.hmm_model = MarketHMM(n_components=n_hmm_components, covariance_type=covariance_type, random_state=random_state)
         self.wavelet_level = wavelet_level
+        self.monte_carlo = MonteCarloOptimizer(n_simulations=n_monte_carlo_sims, confidence_level=0.95)
 
     def _prepare_hmm_features(self, smoothed_data):
         """
@@ -134,15 +136,58 @@ class SignalGenerator:
             last_price = raw_price_data[-1]
 
             if prob_bullish > BULLISH_STATE_THRESHOLD:
-                # Bullish signal: Entry, Take Profit, Stop Loss for a long position
+                # Bullish signal: Use Monte Carlo for dynamic TP/SL
                 entry_point = last_price * 1.001  # Buy slightly above current price
-                take_profit = last_price * 1.01    # 1% TP
-                stop_loss = last_price * 0.995   # 0.5% SL
+                
+                # Calculate Monte Carlo TP/SL
+                mc_result = self.monte_carlo.calculate_tp_sl(
+                    raw_price_data, last_price, signal_type='BUY', time_horizon=20
+                )
+                take_profit = mc_result['tp']
+                stop_loss = mc_result['sl']
+                
+                # Calculate risk metrics
+                risk_metrics = self.monte_carlo.calculate_risk_metrics(
+                    raw_price_data, last_price, take_profit, stop_loss, 'BUY'
+                )
+                
+                return {
+                    "entry": entry_point,
+                    "tp": take_profit,
+                    "sl": stop_loss,
+                    "market_context": current_market_context,
+                    "signal_type": "BUY",
+                    "refined_probability_example": refined_prob[-1] if len(refined_prob) > 0 else None,
+                    "monte_carlo": mc_result,
+                    "risk_metrics": risk_metrics
+                }
+                
             elif prob_bearish > BEARISH_STATE_THRESHOLD:
-                # Bearish signal: Entry, Take Profit, Stop Loss for a short position
+                # Bearish signal: Use Monte Carlo for dynamic TP/SL
                 entry_point = last_price * 0.999  # Sell slightly below current price
-                take_profit = last_price * 0.99    # 1% TP
-                stop_loss = last_price * 1.005   # 0.5% SL
+                
+                # Calculate Monte Carlo TP/SL
+                mc_result = self.monte_carlo.calculate_tp_sl(
+                    raw_price_data, last_price, signal_type='SELL', time_horizon=20
+                )
+                take_profit = mc_result['tp']
+                stop_loss = mc_result['sl']
+                
+                # Calculate risk metrics
+                risk_metrics = self.monte_carlo.calculate_risk_metrics(
+                    raw_price_data, last_price, take_profit, stop_loss, 'SELL'
+                )
+                
+                return {
+                    "entry": entry_point,
+                    "tp": take_profit,
+                    "sl": stop_loss,
+                    "market_context": current_market_context,
+                    "signal_type": "SELL",
+                    "refined_probability_example": refined_prob[-1] if len(refined_prob) > 0 else None,
+                    "monte_carlo": mc_result,
+                    "risk_metrics": risk_metrics
+                }
             else:
                 # Neutral or uncertain state, no signal
                 return {"entry": None, "tp": None, "sl": None, "market_context": current_market_context}

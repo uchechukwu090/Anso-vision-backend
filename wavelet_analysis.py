@@ -1,5 +1,5 @@
 import numpy as np
-import PyWavelets as pywt
+import pywt
 
 def apply_wavelet_decomposition(signal, wavelet='db1', level=1):
     """
