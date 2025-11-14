@@ -127,6 +127,23 @@ def execute_signal():
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
 
+@app.route('/webhook/live', methods=['POST'])
+def receive_live_candles():
+    data = request.json
+    symbol = data.get("symbol")
+    candles = data.get("candles", [])
+
+    if len(candles) < 100:
+        return jsonify({"error": "Insufficient candles"}), 400
+
+    result = run_analysis(symbol, candles)
+    return jsonify(result)
+
+@app.route('/news/today', methods=['GET'])
+def get_today_news():
+    response = requests.get("https://anso-vision-data-fetcher.onrender.com/news")
+    return jsonify(response.json())
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
