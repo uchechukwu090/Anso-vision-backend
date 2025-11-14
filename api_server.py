@@ -1,6 +1,7 @@
 import os
-from flask import Flask, request, jsonify
+import requests
 import numpy as np
+from flask import Flask, request, jsonify
 from kalman_filter import apply_kalman_filter
 from signal_generator import SignalGenerator
 from hmm_model import MarketHMM
@@ -10,15 +11,21 @@ from monte_carlo_optimizer import MonteCarloOptimizer
 
 app = Flask(__name__)
 
-# Initialize once at startup
+# Initialize models
 signal_gen = SignalGenerator(n_hmm_components=3)
-
-# ✅ Ensure MonteCarloOptimizer is attached
 if not hasattr(signal_gen, "monte_carlo") or signal_gen.monte_carlo is None:
     signal_gen.monte_carlo = MonteCarloOptimizer()
 
 context_hmm = ContextAwareHMM()
 market_analyzer = MarketAnalyzer()
+
+# 🔐 News-aware trading check
+def check_news_before_trade():
+    try:
+        response = requests.get("https://anso-vision-news-model.onrender.com/should-trade")
+        return response.json().get("can_trade", True)
+    except:
+        return True  # Fail-safe: allow trading if news check fails
 
 @app.route('/health', methods=['GET'])
 def health_check():
@@ -50,18 +57,14 @@ def analyze_signal():
 
         context_signal = context_hmm.analyze_with_context(prices, volumes, current_hmm_state)
         signal_type = 'BUY' if context_signal['signal'] == 'BUY' else 'SELL'
-
         current_price = prices[-1]
 
-        # ✅ Safe Monte Carlo usage
-        mc_result = {}
-        risk_metrics = {}
         try:
             mc_result = signal_gen.monte_carlo.calculate_tp_sl(prices, current_price, signal_type)
             risk_metrics = signal_gen.monte_carlo.calculate_risk_metrics(
                 prices, current_price, mc_result['tp'], mc_result['sl'], signal_type
             )
-        except Exception as mc_error:
+        except Exception:
             mc_result = {'tp': current_price * 1.01, 'sl': current_price * 0.99, 'confidence': 0.5}
             risk_metrics = {'risk_reward_ratio': 1.0, 'potential_profit_pct': 1.0,
                             'potential_loss_pct': 1.0, 'prob_tp': 0.5, 'expected_value': 0.0}
@@ -102,6 +105,13 @@ def analyze_signal():
 @app.route('/execute', methods=['POST'])
 def execute_signal():
     try:
+        if not check_news_before_trade():
+            return jsonify({
+                'success': False,
+                'status': 'blocked',
+                'reason': 'High-impact news today — trading paused for safety'
+            }), 403
+
         data = request.json or {}
         symbol = data.get('symbol')
         entry = data.get('entry')
@@ -136,8 +146,8 @@ def receive_live_candles():
     if len(candles) < 100:
         return jsonify({"error": "Insufficient candles"}), 400
 
-    result = run_analysis(symbol, candles)
-    return jsonify(result)
+    result = analyze_signal()
+    return result
 
 @app.route('/news/today', methods=['GET'])
 def get_today_news():
