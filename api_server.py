@@ -2,6 +2,7 @@ import os
 import requests
 import numpy as np
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 from kalman_filter import apply_kalman_filter
 from signal_generator import SignalGenerator
 from hmm_model import MarketHMM
@@ -10,6 +11,7 @@ from market_analyzer import MarketAnalyzer
 from monte_carlo_optimizer import MonteCarloOptimizer
 
 app = Flask(__name__)
+CORS(app)
 
 # Initialize models
 signal_gen = SignalGenerator(n_hmm_components=3)
