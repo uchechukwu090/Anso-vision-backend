@@ -69,8 +69,8 @@ def run_backtest(ticker, start_date, end_date, n_hmm_components, covariance_type
     try:
         data = yf.download(ticker, start=start_date, end=end_date, progress=False)
         
-        if data.empty or len(data) < 100:
-            print(f"❌ Insufficient data for {ticker}. Got {len(data)} days, need at least 100.")
+        if data.empty or len(data) < 300:
+            print(f"❌ Insufficient data for {ticker}. Got {len(data)} days, need at least 300.")
             return None, None, None, None, None
         
         historical_prices = data['Close'].values.flatten()
@@ -80,8 +80,9 @@ def run_backtest(ticker, start_date, end_date, n_hmm_components, covariance_type
         return None, None, None, None, None
 
     # Implement a rolling window backtest
-    LOOKBACK_WINDOW = 100  # Use 100 days for signal generation
+    LOOKBACK_WINDOW = 250  # Use 250 days (1 year) for signal generation - more stable
     TRADE_HOLD_PERIOD = 20  # How many periods to hold the trade
+    HMM_RETRAIN_INTERVAL = 50  # Retrain HMM every 50 candles instead of every candle
 
     # Initialize metrics
     trades_executed = []
@@ -94,25 +95,29 @@ def run_backtest(ticker, start_date, end_date, n_hmm_components, covariance_type
         print(f"❌ Not enough data. Need {LOOKBACK_WINDOW + TRADE_HOLD_PERIOD}, have {len(historical_prices)}")
         return None, None, None, None, None
 
+    # Initialize signal generator once
+    signal_generator = SignalGenerator(
+        n_hmm_components=n_hmm_components, 
+        covariance_type=covariance_type, 
+        random_state=random_state
+    )
+    last_train_idx = 0
+
     for i in range(LOOKBACK_WINDOW, len(historical_prices) - TRADE_HOLD_PERIOD):
         # Define the current training window
         train_data = historical_prices[i - LOOKBACK_WINDOW : i]
         
-        # Re-initialize SignalGenerator for each rolling window
+        # Only retrain HMM every HMM_RETRAIN_INTERVAL candles for efficiency
         try:
-            signal_generator = SignalGenerator(
-                n_hmm_components=n_hmm_components, 
-                covariance_type=covariance_type, 
-                random_state=random_state
-            )
-            
-            # Train HMM on features, not raw prices
-            hmm_features = signal_generator._prepare_hmm_features(train_data)
-            
-            if len(hmm_features) < signal_generator.hmm_model.n_components:
-                continue
-            
-            signal_generator.hmm_model.train(hmm_features)
+            if i - last_train_idx >= HMM_RETRAIN_INTERVAL or last_train_idx == 0:
+                # Train HMM on features, not raw prices
+                hmm_features = signal_generator._prepare_hmm_features(train_data)
+                
+                if len(hmm_features) < signal_generator.hmm_model.n_components:
+                    continue
+                
+                signal_generator.hmm_model.train(hmm_features)
+                last_train_idx = i
             
             # Generate signal for the current data point
             signal = signal_generator.generate_signals(train_data)

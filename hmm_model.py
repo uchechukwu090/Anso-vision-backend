@@ -2,7 +2,7 @@ import numpy as np
 from hmmlearn import hmm
 
 class MarketHMM:
-    def __init__(self, n_components=3, n_iter=100, covariance_type='diag', random_state=None, smoothing_window=5):
+    def __init__(self, n_components=3, n_iter=100, covariance_type='diag', random_state=None, smoothing_window=12, min_state_duration=3, state_switch_threshold=0.75):
         """
         Initializes the Hidden Markov Model for market context identification.
 
@@ -11,14 +11,19 @@ class MarketHMM:
             n_iter (int): Number of iterations for the EM algorithm.
             covariance_type (str): The type of covariance matrix to use ('spherical', 'diag', 'full', 'tied').
             random_state (int, optional): Seed for the random number generator for reproducibility. Defaults to None.
-            smoothing_window (int): Number of candles to smooth over to prevent rapid state changes. Default: 5.
+            smoothing_window (int): Number of candles to smooth over to prevent rapid state changes. Default: 12.
+            min_state_duration (int): Minimum candles a state must persist before switching. Default: 3.
+            state_switch_threshold (float): Minimum probability required to switch states. Default: 0.75.
         """
         self.model = hmm.GaussianHMM(n_components=n_components, covariance_type=covariance_type, n_iter=n_iter, random_state=random_state)
         self.n_components = n_components
         self.smoothing_window = smoothing_window
+        self.min_state_duration = min_state_duration
+        self.state_switch_threshold = state_switch_threshold
         self.previous_state = None
         self.state_confidence = 0.0
         self.state_history = []  # Track last N states for stability analysis
+        self.state_duration_counter = 0  # Track how long current state has been active
 
     def train(self, data):
         """
@@ -49,18 +54,23 @@ class MarketHMM:
         # Get raw predictions
         raw_states = self.model.predict(data)
         
+        # Get state probabilities for confidence checking
+        state_probs = self.model.predict_proba(data)
+        
         # Apply smoothing to prevent rapid state changes
-        smoothed_states = self._smooth_states(raw_states)
+        smoothed_states = self._smooth_states(raw_states, state_probs)
         
         return smoothed_states
 
-    def _smooth_states(self, states):
+    def _smooth_states(self, states, state_probabilities=None):
         """
-        Smooth state predictions using majority voting over a sliding window.
+        Smooth state predictions using majority voting over a sliding window
+        with minimum state duration and confidence threshold requirements.
         This prevents the HMM from flipping states on every candle.
         
         Args:
             states (np.array): Raw predicted states from the model
+            state_probabilities (np.array): State probabilities for confidence checking
             
         Returns:
             np.array: Smoothed states
@@ -70,7 +80,7 @@ class MarketHMM:
         
         smoothed = np.copy(states)
         
-        # Apply majority voting in a sliding window
+        # Apply majority voting in a sliding window with confidence check
         for i in range(len(states)):
             # Define window boundaries
             start = max(0, i - self.smoothing_window // 2)
@@ -79,6 +89,23 @@ class MarketHMM:
             # Get most common state in the window
             window_states = states[start:end]
             most_common_state = np.bincount(window_states.astype(int)).argmax()
+            
+            # Check if we should enforce minimum state duration
+            if i > 0 and smoothed[i-1] != most_common_state:
+                # State wants to change - check if it meets duration requirement
+                recent_states = smoothed[max(0, i - self.min_state_duration):i]
+                if len(recent_states) > 0 and len(recent_states) == self.min_state_duration:
+                    # Check if previous state held for minimum duration
+                    prev_state = smoothed[i-1]
+                    if np.sum(recent_states == prev_state) >= self.min_state_duration:
+                        # Previous state held long enough, check confidence for switch
+                        if state_probabilities is not None and i < len(state_probabilities):
+                            new_state_prob = state_probabilities[i, most_common_state]
+                            if new_state_prob < self.state_switch_threshold:
+                                # Not confident enough to switch, keep previous state
+                                smoothed[i] = prev_state
+                                continue
+            
             smoothed[i] = most_common_state
         
         return smoothed
@@ -136,7 +163,7 @@ if __name__ == '__main__':
     synthetic_data = np.vstack([data_state0, data_state1, data_state2, data_state0])
 
     # Initialize and train HMM
-    hmm_model = MarketHMM(n_components=3, n_iter=100, random_state=42, smoothing_window=5)
+    hmm_model = MarketHMM(n_components=3, n_iter=100, random_state=42, smoothing_window=12)
     hmm_model.train(synthetic_data)
 
     # Predict states

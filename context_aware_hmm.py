@@ -72,13 +72,14 @@ class ContextAwareHMM:
 
     def _analyze_volume(self, volumes):
         # Compare current volume to recent average to classify level
+        # Using stricter thresholds for more accurate volume signals
         average = np.mean(volumes[-20:])
         current = volumes[-1]
         ratio = current / average if average > 0 else 1
 
-        if ratio > 1.5:
+        if ratio > 2.0:  # Stricter threshold: was 1.5
             return VolumeLevel.HIGH
-        elif ratio < 0.7:
+        elif ratio < 0.5:  # Stricter threshold: was 0.7
             return VolumeLevel.LOW
         else:
             return VolumeLevel.NORMAL

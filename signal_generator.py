@@ -57,6 +57,11 @@ class SignalGenerator:
         if not isinstance(raw_price_data, np.ndarray) or raw_price_data.ndim != 1:
             raise ValueError("Input raw_price_data must be a 1D numpy array.")
 
+        # Use rolling window for HMM training (last 250 candles max)
+        MAX_ROLLING_WINDOW = 250
+        if len(raw_price_data) > MAX_ROLLING_WINDOW:
+            raw_price_data = raw_price_data[-MAX_ROLLING_WINDOW:]
+
         # 1. Kalman Filter for smoothing
         # print("Applying Kalman Filter for smoothing...") # Suppress intermediate print
         smoothed_data = apply_kalman_filter(raw_price_data)

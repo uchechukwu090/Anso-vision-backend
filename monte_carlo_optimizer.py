@@ -14,24 +14,24 @@ class MonteCarloOptimizer:
     5. No need for historical trade logs - uses price data directly
     """
     
-    def __init__(self, n_simulations: int = 10000, confidence_level: float = 0.95):
+    def __init__(self, n_simulations: int = 10000, confidence_level: float = 0.88):
         """
         Args:
             n_simulations: Number of Monte Carlo paths to simulate
-            confidence_level: Confidence level for quantile calculations (0.95 = 95%)
+            confidence_level: Confidence level for quantile calculations (0.88 = 88% for more conservative targets)
         """
         self.n_simulations = n_simulations
         self.confidence_level = confidence_level
         self.percentile_low = (1 - confidence_level) / 2 * 100
         self.percentile_high = (1 + confidence_level) / 2 * 100
     
-    def calculate_volatility(self, price_data: np.ndarray, window: int = 20) -> float:
+    def calculate_volatility(self, price_data: np.ndarray, window: int = 75) -> float:
         """
         Calculate annualized volatility from price returns.
         
         Args:
             price_data: 1D array of prices
-            window: Rolling window for volatility calculation
+            window: Rolling window for volatility calculation (default: 75 for more stable estimates)
             
         Returns:
             Annualized volatility (assuming 252 trading days/year)
@@ -51,13 +51,13 @@ class MonteCarloOptimizer:
         
         return volatility
     
-    def calculate_drift(self, price_data: np.ndarray, window: int = 50) -> float:
+    def calculate_drift(self, price_data: np.ndarray, window: int = 100) -> float:
         """
         Calculate drift (mean return) from recent price data.
         
         Args:
             price_data: 1D array of prices
-            window: Number of recent periods to consider
+            window: Number of recent periods to consider (default: 100 for more stable estimates)
             
         Returns:
             Annualized drift (mean return)
