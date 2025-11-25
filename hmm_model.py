@@ -2,7 +2,7 @@ import numpy as np
 from hmmlearn import hmm
 
 class MarketHMM:
-    def __init__(self, n_components=3, n_iter=100, covariance_type='diag', random_state=None):
+    def __init__(self, n_components=3, n_iter=100, covariance_type='diag', random_state=None, smoothing_window=5):
         """
         Initializes the Hidden Markov Model for market context identification.
 
@@ -11,9 +11,14 @@ class MarketHMM:
             n_iter (int): Number of iterations for the EM algorithm.
             covariance_type (str): The type of covariance matrix to use ('spherical', 'diag', 'full', 'tied').
             random_state (int, optional): Seed for the random number generator for reproducibility. Defaults to None.
+            smoothing_window (int): Number of candles to smooth over to prevent rapid state changes. Default: 5.
         """
         self.model = hmm.GaussianHMM(n_components=n_components, covariance_type=covariance_type, n_iter=n_iter, random_state=random_state)
         self.n_components = n_components
+        self.smoothing_window = smoothing_window
+        self.previous_state = None
+        self.state_confidence = 0.0
+        self.state_history = []  # Track last N states for stability analysis
 
     def train(self, data):
         """
@@ -30,17 +35,53 @@ class MarketHMM:
 
     def predict_states(self, data):
         """
-        Predicts the hidden states for the given data.
+        Predicts the hidden states for the given data with smoothing to prevent rapid oscillation.
 
         Args:
             data (np.array): A 2D numpy array of observations.
 
         Returns:
-            np.array: A 1D numpy array of predicted hidden states.
+            np.array: A 1D numpy array of predicted hidden states (smoothed).
         """
         if not isinstance(data, np.ndarray) or data.ndim != 2:
             raise ValueError("Input data for prediction must be a 2D numpy array.")
-        return self.model.predict(data)
+        
+        # Get raw predictions
+        raw_states = self.model.predict(data)
+        
+        # Apply smoothing to prevent rapid state changes
+        smoothed_states = self._smooth_states(raw_states)
+        
+        return smoothed_states
+
+    def _smooth_states(self, states):
+        """
+        Smooth state predictions using majority voting over a sliding window.
+        This prevents the HMM from flipping states on every candle.
+        
+        Args:
+            states (np.array): Raw predicted states from the model
+            
+        Returns:
+            np.array: Smoothed states
+        """
+        if len(states) < self.smoothing_window:
+            return states
+        
+        smoothed = np.copy(states)
+        
+        # Apply majority voting in a sliding window
+        for i in range(len(states)):
+            # Define window boundaries
+            start = max(0, i - self.smoothing_window // 2)
+            end = min(len(states), i + self.smoothing_window // 2 + 1)
+            
+            # Get most common state in the window
+            window_states = states[start:end]
+            most_common_state = np.bincount(window_states.astype(int)).argmax()
+            smoothed[i] = most_common_state
+        
+        return smoothed
 
     def get_state_probabilities(self, data):
         """
@@ -56,6 +97,28 @@ class MarketHMM:
         if not isinstance(data, np.ndarray) or data.ndim != 2:
             raise ValueError("Input data for state probabilities must be a 2D numpy array.")
         return self.model.predict_proba(data)
+
+    def get_state_stability(self, states):
+        """
+        Calculate how stable/confident the current state is.
+        If the last N candles all show the same state, confidence is high.
+        
+        Args:
+            states (np.array): Predicted states
+            
+        Returns:
+            float: Confidence score between 0.0 and 1.0
+        """
+        if len(states) < self.smoothing_window:
+            return 0.5  # Default moderate confidence
+        
+        recent_states = states[-self.smoothing_window:]
+        # Count how many of the last N states match the current state
+        current_state = states[-1]
+        matches = np.sum(recent_states == current_state)
+        confidence = matches / len(recent_states)
+        
+        return float(confidence)
 
 if __name__ == '__main__':
     # Example usage
@@ -73,7 +136,7 @@ if __name__ == '__main__':
     synthetic_data = np.vstack([data_state0, data_state1, data_state2, data_state0])
 
     # Initialize and train HMM
-    hmm_model = MarketHMM(n_components=3, n_iter=100, random_state=42)
+    hmm_model = MarketHMM(n_components=3, n_iter=100, random_state=42, smoothing_window=5)
     hmm_model.train(synthetic_data)
 
     # Predict states
@@ -85,3 +148,7 @@ if __name__ == '__main__':
     state_probabilities = hmm_model.get_state_probabilities(synthetic_data)
     print("\nState probabilities for first sample:", np.exp(state_probabilities[0]))
     print("State probabilities for last sample:", np.exp(state_probabilities[-1]))
+    
+    # Get state stability
+    stability = hmm_model.get_state_stability(predicted_states)
+    print(f"\nState stability: {stability:.2%}")

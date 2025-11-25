@@ -125,42 +125,140 @@ class ContextAwareHMM:
         else:
             hmm_enum = HMMState.NEUTRAL
 
-        # Decision matrix: combine HMM, trend, and volume into actionable signals
-        if (hmm_enum == HMMState.BULLISH and
-            actual_trend == Trend.UPTREND and
-            volume_level == VolumeLevel.HIGH):
-            return {'signal': 'BUY', 'confidence': 0.88, 'reasoning': 'Strong bullish confluence', 'type': 'STRONG_BUY'}
+        # ==================== BULLISH SIGNALS ====================
+        if hmm_enum == HMMState.BULLISH and actual_trend == Trend.UPTREND:
+            # Strong bullish confluence: HMM + Trend aligned
+            if volume_level == VolumeLevel.HIGH:
+                return {
+                    'signal': 'BUY',
+                    'confidence': 0.88,
+                    'reasoning': 'Strong bullish confluence: HMM + Trend + High Volume',
+                    'type': 'STRONG_BUY'
+                }
+            elif volume_level == VolumeLevel.NORMAL:
+                # 2/3 confluence: HMM + Trend (volume normal, not confirming)
+                return {
+                    'signal': 'BUY',
+                    'confidence': 0.75,
+                    'reasoning': 'Bullish confluence: HMM + Uptrend (normal volume)',
+                    'type': 'BUY'
+                }
+            else:  # LOW volume
+                # Still signal but with caution
+                return {
+                    'signal': 'BUY',
+                    'confidence': 0.65,
+                    'reasoning': 'Bullish HMM + Uptrend but low volume - use tighter stops',
+                    'type': 'BUY_WEAK'
+                }
 
-        if (hmm_enum == HMMState.BEARISH and
-            actual_trend == Trend.UPTREND and
-            volume_level == VolumeLevel.HIGH):
-            return {'signal': 'SELL', 'confidence': 0.78, 'reasoning': 'Pullback detected', 'type': 'PULLBACK_SHORT'}
+        # ==================== BEARISH SIGNALS ====================
+        if hmm_enum == HMMState.BEARISH and actual_trend == Trend.DOWNTREND:
+            # Strong bearish confluence: HMM + Trend aligned
+            if volume_level == VolumeLevel.HIGH:
+                return {
+                    'signal': 'SELL',
+                    'confidence': 0.86,
+                    'reasoning': 'Strong bearish confluence: HMM + Trend + High Volume',
+                    'type': 'STRONG_SELL'
+                }
+            elif volume_level == VolumeLevel.NORMAL:
+                # 2/3 confluence: HMM + Trend
+                return {
+                    'signal': 'SELL',
+                    'confidence': 0.74,
+                    'reasoning': 'Bearish confluence: HMM + Downtrend (normal volume)',
+                    'type': 'SELL'
+                }
+            else:  # LOW volume
+                return {
+                    'signal': 'SELL',
+                    'confidence': 0.63,
+                    'reasoning': 'Bearish HMM + Downtrend but low volume - use tighter stops',
+                    'type': 'SELL_WEAK'
+                }
 
-        if (hmm_enum == HMMState.BEARISH and
-            actual_trend == Trend.UPTREND and
-            volume_level == VolumeLevel.LOW):
-            return {'signal': 'WAIT', 'confidence': 0.3, 'reasoning': 'Fakeout risk', 'type': 'FAKEOUT_RISK'}
+        # ==================== CONSOLIDATION BREAKOUTS ====================
+        if hmm_enum == HMMState.NEUTRAL and actual_trend == Trend.UPTREND:
+            # Neutral HMM breaking upward with decent volume
+            if volume_level in [VolumeLevel.NORMAL, VolumeLevel.HIGH]:
+                confidence = 0.80 if volume_level == VolumeLevel.HIGH else 0.72
+                return {
+                    'signal': 'BUY',
+                    'confidence': confidence,
+                    'reasoning': f'Consolidation breakout: Neutral HMM + Uptrend + {volume_level.name} volume',
+                    'type': 'CONSOLIDATION_BUY'
+                }
+            else:
+                return {
+                    'signal': 'WAIT',
+                    'confidence': 0.4,
+                    'reasoning': 'Uptrend present but low volume - waiting for confirmation',
+                    'type': 'LOW_VOLUME_WAIT'
+                }
 
-        if (hmm_enum == HMMState.BULLISH and actual_trend == Trend.DOWNTREND):
-            return {'signal': 'WAIT', 'confidence': 0.4, 'reasoning': 'Bearish divergence', 'type': 'DIVERGENCE'}
+        if hmm_enum == HMMState.NEUTRAL and actual_trend == Trend.DOWNTREND:
+            # Neutral HMM breaking downward with decent volume
+            if volume_level in [VolumeLevel.NORMAL, VolumeLevel.HIGH]:
+                confidence = 0.78 if volume_level == VolumeLevel.HIGH else 0.70
+                return {
+                    'signal': 'SELL',
+                    'confidence': confidence,
+                    'reasoning': f'Consolidation breakout: Neutral HMM + Downtrend + {volume_level.name} volume',
+                    'type': 'CONSOLIDATION_SELL'
+                }
+            else:
+                return {
+                    'signal': 'WAIT',
+                    'confidence': 0.4,
+                    'reasoning': 'Downtrend present but low volume - waiting for confirmation',
+                    'type': 'LOW_VOLUME_WAIT'
+                }
 
-        if (hmm_enum == HMMState.NEUTRAL and
-            actual_trend == Trend.UPTREND and
-            volume_level == VolumeLevel.HIGH):
-            return {'signal': 'BUY', 'confidence': 0.82, 'reasoning': 'Consolidation breakout', 'type': 'BREAKOUT_BUY'}
+        # ==================== DIVERGENCE SIGNALS (use with caution) ====================
+        if hmm_enum == HMMState.BULLISH and actual_trend == Trend.DOWNTREND:
+            # Bullish HMM but market going down = potential reversal zone
+            return {
+                'signal': 'WAIT',
+                'confidence': 0.5,
+                'reasoning': 'Bullish HMM in downtrend - potential reversal zone, monitor for confirmation',
+                'type': 'REVERSAL_WATCH'
+            }
 
-        if (hmm_enum == HMMState.NEUTRAL and
-            actual_trend == Trend.UPTREND and
-            volume_level == VolumeLevel.LOW):
-            return {'signal': 'WAIT', 'confidence': 0.3, 'reasoning': 'Institutional liquidation', 'type': 'LIQUIDATION_RISK'}
+        if hmm_enum == HMMState.BEARISH and actual_trend == Trend.UPTREND:
+            # Bearish HMM but market going up = potential pullback
+            if volume_level == VolumeLevel.HIGH:
+                return {
+                    'signal': 'WAIT',
+                    'confidence': 0.55,
+                    'reasoning': 'Bearish divergence in strong uptrend - potential pullback, risky short',
+                    'type': 'PULLBACK_RISK'
+                }
+            else:
+                # Low volume bearish signal in uptrend = usually noise
+                return {
+                    'signal': 'WAIT',
+                    'confidence': 0.3,
+                    'reasoning': 'Bearish noise in uptrend - likely fakeout, stay bullish',
+                    'type': 'FAKEOUT_RISK'
+                }
 
-        if (hmm_enum == HMMState.BEARISH and
-            actual_trend == Trend.DOWNTREND and
-            volume_level == VolumeLevel.HIGH):
-            return {'signal': 'SELL', 'confidence': 0.85, 'reasoning': 'Strong bearish confluence', 'type': 'STRONG_SELL'}
+        # ==================== DEFAULT: NEUTRAL/SIDEWAYS ====================
+        if hmm_enum == HMMState.NEUTRAL and actual_trend == Trend.SIDEWAYS:
+            return {
+                'signal': 'WAIT',
+                'confidence': 0.2,
+                'reasoning': 'Market in consolidation/sideways mode - waiting for directional breakout',
+                'type': 'CONSOLIDATION_NEUTRAL'
+            }
 
-        # No strong confluence found
-        return {'signal': 'WAIT', 'confidence': 0.2, 'reasoning': 'No clear signal', 'type': 'CONFLICTING'}
+        # ==================== NO CLEAR CONFLUENCE ====================
+        return {
+            'signal': 'WAIT',
+            'confidence': 0.15,
+            'reasoning': f'Insufficient confluence - HMM:{hmm_enum.name}, Trend:{actual_trend.name}, Volume:{volume_level.name}',
+            'type': 'INSUFFICIENT_CONFLUENCE'
+        }
 
     def _state_name(self, state):
         # Normalize name for context payload; avoid mismatches like 'CONSOLIDATION' vs 'NEUTRAL'
