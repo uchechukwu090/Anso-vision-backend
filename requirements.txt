@@ -5,3 +5,4 @@ hmmlearn
 PyWavelets
 numpy
 scipy
+requests
