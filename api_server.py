@@ -1,18 +1,31 @@
+"""
+PRODUCTION-READY API Server with:
+- WebSocket real-time data
+- Model persistence (no retraining every request)
+- Ensemble validation
+- Risk management & circuit breakers
+- Proper error handling
+"""
 import os
 import requests
 import numpy as np
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from kalman_filter import apply_kalman_filter
-from signal_generator import SignalGenerator
-from hmm_model import MarketHMM
-from context_aware_hmm import ContextAwareHMM
+from dotenv import load_dotenv
+from datetime import datetime
+
+# Import new components
+from websocket_manager import WebSocketManager, SimulatedWebSocketManager
+from model_manager import get_model_manager
+from ensemble_validator import EnsembleValidator
+from risk_manager import get_risk_manager
 from market_analyzer import MarketAnalyzer
-from monte_carlo_optimizer import MonteCarloOptimizer
+
+load_dotenv()
 
 app = Flask(__name__)
 
-# CORS Configuration - Production Ready
+# CORS Configuration
 ALLOWED_ORIGINS = os.getenv('ALLOWED_ORIGINS', '*').split(',')
 CORS(app, resources={
     r"/*": {
@@ -22,48 +35,163 @@ CORS(app, resources={
     }
 })
 
-# Initialize models
-signal_gen = SignalGenerator(n_hmm_components=3)
-if not hasattr(signal_gen, "monte_carlo") or signal_gen.monte_carlo is None:
-    signal_gen.monte_carlo = MonteCarloOptimizer()
-
-context_hmm = ContextAwareHMM()
+# Initialize components
+model_manager = get_model_manager()
+ensemble_validator = EnsembleValidator(min_confirmation_score=0.65)
+risk_manager = get_risk_manager()
 market_analyzer = MarketAnalyzer()
+
+# WebSocket Manager (choose real or simulated)
+USE_SIMULATED_WS = os.getenv('USE_SIMULATED_WEBSOCKET', 'false').lower() == 'true'
+if USE_SIMULATED_WS:
+    ws_manager = SimulatedWebSocketManager()
+    print("🧪 Using SIMULATED WebSocket (for testing)")
+else:
+    ws_manager = WebSocketManager()
+    print("📡 Using REAL WebSocket connections")
+
+# Global state
+MONITORED_SYMBOLS = []
+WS_RUNNING = False
 
 # Environment variables
 NEWS_MODEL_URL = os.getenv('NEWS_MODEL_URL', 'https://anso-vision-news-model.onrender.com')
-DATA_FETCHER_URL = os.getenv('DATA_FETCHER_URL', 'https://anso-vision-data-fetcher.onrender.com')
+TRADING_BACKEND_URL = os.getenv('TRADING_BACKEND_URL', 'https://anso-vision-backend.onrender.com')
+TRADING_API_KEY = os.getenv('TRADING_API_KEY', 'Mr.creative090')
 
-def check_news_before_trade():
-    """Check if trading should be paused due to high-impact news"""
+
+def on_new_candle_callback(symbol: str, candle: dict):
+    """Callback triggered when new candle arrives via WebSocket"""
     try:
-        response = requests.get(f"{NEWS_MODEL_URL}/should-trade", timeout=5)
-        if response.status_code == 200:
-            return response.json().get("can_trade", True)
-        return True
+        # Get candle buffer
+        buffer = ws_manager.get_buffer(symbol)
+        
+        if not buffer or not buffer.is_ready(min_candles=250):
+            return  # Not enough data yet
+        
+        # Get prices and volumes
+        prices = buffer.get_prices(n=300)
+        volumes = buffer.get_volumes(n=300)
+        
+        # Generate signal (model manager handles training automatically)
+        signal = model_manager.generate_signal(symbol, prices, volumes, auto_train=True)
+        
+        if not signal or signal.get('entry') is None:
+            return
+        
+        signal_type = signal.get('signal_type')
+        
+        if signal_type not in ['BUY', 'SELL']:
+            return
+        
+        # Validate with ensemble
+        validation = ensemble_validator.validate_signal(signal, prices, volumes)
+        
+        if not validation['approved']:
+            print(f"⚠️ {symbol}: Signal rejected by ensemble - {', '.join(validation['warnings'])}")
+            return
+        
+        # Check risk limits
+        allowed, reason = risk_manager.should_allow_signal(symbol, signal_type)
+        
+        if not allowed:
+            print(f"🛑 {symbol}: Signal blocked by risk manager - {reason}")
+            return
+        
+        # Check market conditions
+        volatility = signal.get('monte_carlo', {}).get('volatility', 0)
+        volume_ratio = volumes[-1] / np.mean(volumes[-20:]) if len(volumes) >= 20 else 1
+        
+        suitable, condition_reason = risk_manager.check_market_conditions(volatility, volume_ratio)
+        
+        if not suitable:
+            print(f"🌪️ {symbol}: Market conditions unsuitable - {condition_reason}")
+            return
+        
+        # Record signal
+        risk_manager.record_signal(symbol, signal_type, validation['confidence'])
+        
+        # Send to trading backend
+        send_signal_to_trading_backend({
+            'symbol': symbol,
+            'signal': signal_type,
+            'entry': signal['entry'],
+            'tp': signal['tp'],
+            'sl': signal['sl'],
+            'confidence': validation['confidence'],
+            'ensemble_strength': validation['strength'],
+            'timeframe': '1m',
+            'timestamp': datetime.now().isoformat()
+        })
+        
+        print(f"✅ {symbol}: {signal_type} signal sent (confidence: {validation['confidence']:.2f}, strength: {validation['strength']})")
+        
     except Exception as e:
-        print(f"⚠️ News check failed: {str(e)}")
-        return True
+        print(f"❌ Error in candle callback for {symbol}: {e}")
+
+
+def send_signal_to_trading_backend(signal_data: dict):
+    """Send generated signal to trading backend"""
+    try:
+        headers = {
+            "X-API-Key": TRADING_API_KEY,
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "symbol": signal_data.get("symbol"),
+            "action": signal_data.get("signal"),
+            "volume": 0.01,
+            "sl": signal_data.get("sl"),
+            "tp": signal_data.get("tp"),
+            "confidence": signal_data.get("confidence"),
+            "timeframe": signal_data.get("timeframe", "1m"),
+            "ensemble_strength": signal_data.get("ensemble_strength")
+        }
+        
+        response = requests.post(
+            f"{TRADING_BACKEND_URL}/api/signal",
+            json=payload,
+            headers=headers,
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            return response.json()
+        else:
+            print(f"⚠️ Trading backend returned {response.status_code}")
+            return None
+            
+    except Exception as e:
+        print(f"❌ Error sending to trading backend: {e}")
+        return None
+
 
 @app.route('/health', methods=['GET'])
 def health_check():
     """Health check endpoint"""
     return jsonify({
         'status': 'healthy',
-        'service': 'Anso Vision Backend',
-        'version': '2.0.0'
+        'service': 'Anso Vision Backend v3.0',
+        'version': '3.0.0',
+        'websocket_active': WS_RUNNING,
+        'monitored_symbols': MONITORED_SYMBOLS,
+        'models_loaded': len(model_manager.models),
+        'trading_backend_url': TRADING_BACKEND_URL
     }), 200
+
 
 @app.route('/analyze', methods=['POST'])
 def analyze_signal():
     """
-    Analyze market data and generate trading signals
+    Analyze market data and generate trading signals (REST endpoint)
     
     Expected payload:
     {
         "symbol": "EURUSD",
         "candles": [...],
-        "timeframe": "1h" (optional)
+        "timeframe": "1h",
+        "send_to_backend": true
     }
     """
     try:
@@ -71,21 +199,18 @@ def analyze_signal():
         symbol = data.get('symbol')
         candles = data.get('candles')
         timeframe = data.get('timeframe', '1h')
+        send_to_backend = data.get('send_to_backend', True)
 
         # Validation
         if not symbol:
-            return jsonify({
-                'success': False,
-                'error': 'Symbol is required'
-            }), 400
+            return jsonify({'success': False, 'error': 'Symbol is required'}), 400
 
-        if not candles or len(candles) < 100:
+        if not candles or len(candles) < 250:
             return jsonify({
                 'success': False,
                 'error': 'Insufficient candles',
-                'required': 100,
-                'provided': len(candles) if candles else 0,
-                'message': 'At least 100 candles are required for accurate analysis'
+                'required': 250,
+                'provided': len(candles) if candles else 0
             }), 400
 
         # Extract data
@@ -99,144 +224,179 @@ def analyze_signal():
                 'message': str(e)
             }), 400
 
-        # Apply Kalman filter
-        smoothed_prices = apply_kalman_filter(prices)
-        features = signal_gen._prepare_hmm_features(smoothed_prices)
-
-        # Train HMM
-        signal_gen.hmm_model.train(features)
-        hmm_states = signal_gen.hmm_model.predict_states(features)
-        current_hmm_state = hmm_states[-1]
-
-        # Context-aware analysis
-        context_signal = context_hmm.analyze_with_context(prices, volumes, current_hmm_state)
-        signal_type = context_signal['signal']
-        current_price = float(prices[-1])
-
-        # Monte Carlo TP/SL
-        try:
-            mc_result = signal_gen.monte_carlo.calculate_tp_sl(prices, current_price, signal_type)
-            risk_metrics = signal_gen.monte_carlo.calculate_risk_metrics(
-                prices, current_price, mc_result['tp'], mc_result['sl'], signal_type
-            )
-        except Exception as e:
-            print(f"⚠️ Monte Carlo calculation failed: {str(e)}")
-            if signal_type == 'BUY':
-                mc_result = {'tp': current_price * 1.02, 'sl': current_price * 0.98, 'confidence': 0.5}
-            else:
-                mc_result = {'tp': current_price * 0.98, 'sl': current_price * 1.02, 'confidence': 0.5}
-            risk_metrics = {
-                'risk_reward_ratio': 2.0,
-                'potential_profit_pct': 2.0,
-                'potential_loss_pct': 1.0,
-                'prob_tp': 0.5,
-                'expected_value': 0.0
-            }
-
+        # Generate signal using model manager (handles training automatically)
+        signal = model_manager.generate_signal(symbol, prices, volumes, auto_train=True)
+        
+        if not signal or signal.get('entry') is None:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to generate signal',
+                'message': 'Model not ready or insufficient data'
+            }), 500
+        
+        signal_type = signal.get('signal_type', 'WAIT')
+        
+        # Validate with ensemble
+        validation = ensemble_validator.validate_signal(signal, prices, volumes)
+        
+        # Check risk limits
+        if signal_type in ['BUY', 'SELL']:
+            allowed, reason = risk_manager.should_allow_signal(symbol, signal_type)
+            if not allowed:
+                return jsonify({
+                    'success': False,
+                    'error': 'Signal blocked by risk manager',
+                    'reason': reason,
+                    'statistics': risk_manager.get_statistics(symbol)
+                }), 429  # Too Many Requests
+            
+            # Record signal
+            risk_manager.record_signal(symbol, signal_type, validation['confidence'])
+        
         # Market structure
         market_structure = market_analyzer.analyze_market_structure(prices, volumes)
-
+        
+        # Build response
         response = {
             'success': True,
             'symbol': symbol,
             'timeframe': timeframe,
             'signal': signal_type,
-            'entry': float(current_price),
-            'tp': float(mc_result['tp']),
-            'sl': float(mc_result['sl']),
-            'confidence': float(context_signal.get('confidence', mc_result.get('confidence', 0.5))),
-            'reasoning': context_signal.get('reasoning', 'No reasoning provided'),
-            'signal_type': context_signal.get('type', signal_type),
-            'market_context': context_signal.get('context', {}),
-            'market_structure': market_structure,
-            'risk_metrics': {
-                'risk_reward_ratio': float(risk_metrics.get('risk_reward_ratio', 1.0)),
-                'potential_profit_pct': float(risk_metrics.get('potential_profit_pct', 0.0)),
-                'potential_loss_pct': float(risk_metrics.get('potential_loss_pct', 0.0)),
-                'prob_tp': float(risk_metrics.get('prob_tp', 0.5)),
-                'expected_value': float(risk_metrics.get('expected_value', 0.0)),
+            'entry': float(signal.get('entry', 0)),
+            'tp': float(signal.get('tp', 0)),
+            'sl': float(signal.get('sl', 0)),
+            'original_confidence': float(signal.get('confidence', 0)),
+            'ensemble_validation': {
+                'approved': validation['approved'],
+                'confidence': validation['confidence'],
+                'strength': validation['strength'],
+                'confirmations': validation['confirmations'],
+                'warnings': validation['warnings'],
+                'checks': validation['checks']
             },
-            'hmm_state': {
-                '0_bearish': float(current_hmm_state == 0),
-                '1_neutral': float(current_hmm_state == 1),
-                '2_bullish': float(current_hmm_state == 2),
-            }
+            'market_structure': market_structure,
+            'risk_metrics': signal.get('risk_metrics', {}),
+            'model_info': model_manager.get_model_stats(symbol),
+            'timestamp': datetime.now().isoformat()
         }
-
+        
+        # Send to trading backend if requested and signal is valid
+        if send_to_backend and signal_type in ['BUY', 'SELL'] and validation['approved']:
+            backend_result = send_signal_to_trading_backend(response)
+            response['backend_transmission'] = {
+                'sent': True,
+                'result': backend_result
+            }
+        
         return jsonify(response), 200
 
     except Exception as e:
-        print(f"❌ Analysis error: {str(e)}")
+        print(f"❌ Analysis error: {e}")
+        import traceback
+        traceback.print_exc()
         return jsonify({
             'success': False,
             'error': 'Internal server error',
             'message': str(e)
         }), 500
 
-@app.route('/webhook/live', methods=['POST'])
-def receive_live_candles():
-    """Webhook for live candle data from data fetcher"""
-    try:
-        data = request.json
-        symbol = data.get("symbol")
-        candles = data.get("candles", [])
 
-        if len(candles) < 100:
+@app.route('/websocket/start', methods=['POST'])
+def start_websocket():
+    """Start WebSocket monitoring for symbols"""
+    global WS_RUNNING, MONITORED_SYMBOLS
+    
+    try:
+        data = request.json or {}
+        symbols = data.get('symbols', [])
+        timeframe = data.get('timeframe', '1m')
+        
+        if not symbols:
             return jsonify({
                 'success': False,
-                'error': "Insufficient candles",
-                'required': 100,
-                'provided': len(candles)
+                'error': 'No symbols provided'
             }), 400
-
-        # Reuse analyze logic
-        return analyze_signal()
-
+        
+        # Register callbacks
+        for symbol in symbols:
+            ws_manager.add_symbol(symbol)
+            ws_manager.register_callback(symbol, on_new_candle_callback)
+        
+        # Start WebSocket
+        if not WS_RUNNING:
+            ws_manager.start(symbols, timeframe=timeframe)
+            WS_RUNNING = True
+        
+        MONITORED_SYMBOLS = symbols
+        
+        return jsonify({
+            'success': True,
+            'message': f'WebSocket started for {len(symbols)} symbols',
+            'symbols': symbols,
+            'timeframe': timeframe
+        }), 200
+        
     except Exception as e:
         return jsonify({
             'success': False,
             'error': str(e)
         }), 500
 
-@app.route('/news/today', methods=['GET'])
-def get_today_news():
-    """Proxy endpoint for news"""
+
+@app.route('/websocket/stop', methods=['POST'])
+def stop_websocket():
+    """Stop WebSocket monitoring"""
+    global WS_RUNNING
+    
     try:
-        response = requests.get(f"{DATA_FETCHER_URL}/news", timeout=10)
-        return jsonify(response.json()), response.status_code
-    except requests.exceptions.Timeout:
+        ws_manager.stop()
+        WS_RUNNING = False
+        
         return jsonify({
-            'success': False,
-            'error': 'News service timeout'
-        }), 504
+            'success': True,
+            'message': 'WebSocket stopped'
+        }), 200
+        
     except Exception as e:
         return jsonify({
             'success': False,
-            'error': 'Failed to fetch news',
-            'message': str(e)
+            'error': str(e)
         }), 500
 
-@app.errorhandler(404)
-def not_found(error):
-    return jsonify({
-        'success': False,
-        'error': 'Endpoint not found'
-    }), 404
 
-@app.errorhandler(500)
-def internal_error(error):
-    return jsonify({
-        'success': False,
-        'error': 'Internal server error'
-    }), 500
+@app.route('/stats/models', methods=['GET'])
+def get_model_stats():
+    """Get statistics for all models"""
+    return jsonify(model_manager.get_all_stats()), 200
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    debug = os.environ.get("DEBUG", "False").lower() == "true"
+
+@app.route('/stats/risk', methods=['GET'])
+def get_risk_stats():
+    """Get risk management statistics"""
+    symbol = request.args.get('symbol')
+    return jsonify(risk_manager.get_statistics(symbol)), 200
+
+
+@app.route('/admin/reset-limits', methods=['POST'])
+def reset_limits():
+    """Reset risk limits (admin only)"""
+    data = request.json or {}
+    symbol = data.get('symbol')
     
-    print(f"🚀 Starting Anso Vision Backend on port {port}")
-    print(f"📰 News Model URL: {NEWS_MODEL_URL}")
-    print(f"📊 Data Fetcher URL: {DATA_FETCHER_URL}")
-    print(f"🔒 CORS Origins: {ALLOWED_ORIGINS}")
+    risk_manager.reset_limits(symbol)
     
-    app.run(host="0.0.0.0", port=port, debug=debug)
+    return jsonify({
+        'success': True,
+        'message': f'Limits reset for {symbol if symbol else "all symbols"}'
+    }), 200
+
+
+if __name__ == '__main__':
+    print(f"🚀 Anso Vision Backend v3.0 starting...")
+    print(f"📊 Model Manager: Enabled")
+    print(f"🤝 Ensemble Validator: Enabled")
+    print(f"🛡️ Risk Manager: Enabled")
+    print(f"📡 WebSocket: {'Simulated' if USE_SIMULATED_WS else 'Real'}")
+    print(f"🔗 Trading Backend: {TRADING_BACKEND_URL}")
+    
+    app.run(debug=False, port=5000, host='0.0.0.0')

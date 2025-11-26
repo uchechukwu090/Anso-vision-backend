@@ -6,3 +6,7 @@ PyWavelets
 numpy
 scipy
 requests
+python-dotenv
+websocket-client
+yfinance
+pandas
