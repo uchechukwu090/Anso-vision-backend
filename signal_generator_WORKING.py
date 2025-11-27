@@ -7,6 +7,7 @@ from kalman_filter import apply_kalman_filter
 from hmm_model import MarketHMM
 from wavelet_analysis import denoise_signal_with_wavelets
 from monte_carlo_optimizer import MonteCarloOptimizer
+from atr_calculator import ATRCalculator
 
 class SignalGenerator:
     def __init__(self, n_hmm_components=3, wavelet_level=4, covariance_type='diag', random_state=None, n_monte_carlo_sims=10000):
@@ -14,6 +15,7 @@ class SignalGenerator:
         self.hmm_model = MarketHMM(n_components=n_hmm_components, covariance_type=covariance_type, random_state=random_state)
         self.wavelet_level = wavelet_level
         self.monte_carlo = MonteCarloOptimizer(n_simulations=n_monte_carlo_sims, confidence_level=0.95)
+        self.atr_calc = ATRCalculator(atr_period=14, tp_multiplier=2.0, sl_multiplier=1.0)
         print(f"✅ SignalGenerator initialized (HMM components={n_hmm_components})")
 
     def _prepare_hmm_features(self, smoothed_data):
@@ -138,53 +140,55 @@ class SignalGenerator:
             return self._return_wait(f"Error: {str(e)}")
     
     def _generate_buy_signal(self, raw_price_data, last_price, confidence, context, refined_prob):
-        """Generate BUY signal with Monte Carlo TP/SL"""
-        entry_point = last_price * 1.001
+        """Generate BUY signal with ATR-based TP/SL"""
+        # Use ATR for realistic TP/SL
+        atr_result = self.atr_calc.calculate_tp_sl(raw_price_data, last_price, 'BUY')
         
-        mc_result = self.monte_carlo.calculate_tp_sl(
-            raw_price_data, last_price, signal_type='BUY', time_horizon=20
-        )
-        
-        risk_metrics = self.monte_carlo.calculate_risk_metrics(
-            raw_price_data, last_price, mc_result['tp'], mc_result['sl'], 'BUY'
-        )
+        entry_point = atr_result['entry']
+        tp = atr_result['tp']
+        sl = atr_result['sl']
         
         return {
             "entry": float(entry_point),
-            "tp": float(mc_result['tp']),
-            "sl": float(mc_result['sl']),
+            "tp": float(tp),
+            "sl": float(sl),
             "market_context": context,
             "signal_type": "BUY",
             "confidence": float(confidence),
-            "reasoning": f"Bullish HMM state detected (probability: {confidence:.2%})",
-            "refined_probability_example": float(refined_prob[-1]) if len(refined_prob) > 0 else None,
-            "monte_carlo": mc_result,
-            "risk_metrics": risk_metrics
+            "reasoning": f"Bullish HMM state (prob: {confidence:.2%}) | ATR-based stops | R:R {atr_result['risk_reward_ratio']:.1f}:1",
+            "atr_info": {
+                "atr_value": atr_result['atr'],
+                "atr_pct": atr_result['atr_pct'],
+                "risk_reward": atr_result['risk_reward_ratio'],
+                "tp_pips": atr_result['tp_distance_pips'],
+                "sl_pips": atr_result['sl_distance_pips']
+            }
         }
     
     def _generate_sell_signal(self, raw_price_data, last_price, confidence, context, refined_prob):
-        """Generate SELL signal with Monte Carlo TP/SL"""
-        entry_point = last_price * 0.999
+        """Generate SELL signal with ATR-based TP/SL"""
+        # Use ATR for realistic TP/SL
+        atr_result = self.atr_calc.calculate_tp_sl(raw_price_data, last_price, 'SELL')
         
-        mc_result = self.monte_carlo.calculate_tp_sl(
-            raw_price_data, last_price, signal_type='SELL', time_horizon=20
-        )
-        
-        risk_metrics = self.monte_carlo.calculate_risk_metrics(
-            raw_price_data, last_price, mc_result['tp'], mc_result['sl'], 'SELL'
-        )
+        entry_point = atr_result['entry']
+        tp = atr_result['tp']
+        sl = atr_result['sl']
         
         return {
             "entry": float(entry_point),
-            "tp": float(mc_result['tp']),
-            "sl": float(mc_result['sl']),
+            "tp": float(tp),
+            "sl": float(sl),
             "market_context": context,
             "signal_type": "SELL",
             "confidence": float(confidence),
-            "reasoning": f"Bearish HMM state detected (probability: {confidence:.2%})",
-            "refined_probability_example": float(refined_prob[-1]) if len(refined_prob) > 0 else None,
-            "monte_carlo": mc_result,
-            "risk_metrics": risk_metrics
+            "reasoning": f"Bearish HMM state (prob: {confidence:.2%}) | ATR-based stops | R:R {atr_result['risk_reward_ratio']:.1f}:1",
+            "atr_info": {
+                "atr_value": atr_result['atr'],
+                "atr_pct": atr_result['atr_pct'],
+                "risk_reward": atr_result['risk_reward_ratio'],
+                "tp_pips": atr_result['tp_distance_pips'],
+                "sl_pips": atr_result['sl_distance_pips']
+            }
         }
     
     def _return_wait(self, reason):
