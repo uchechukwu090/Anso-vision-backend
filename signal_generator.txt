@@ -1,0 +1,213 @@
+"""
+MASTER SIGNAL ORCHESTRATOR - The Brain of the System
+Fuses HMM, Monte Carlo, Context, and advanced Discounted Entry (Pullback) logic.
+Uses wavelet denoising + Kalman smoothing. Removes predict_current_state usage.
+"""
+import numpy as np
+from typing import Dict
+
+from kalman_filter import apply_kalman_filter
+from hmm_model import MarketHMM
+from wavelet_analysis import denoise_signal_with_wavelets
+from pure_monte_carlo_engine import MonteCarloTradingEngine  # Optional: fast confidence/validation
+from monte_carlo_optimizer import MonteCarloOptimizer        # Primary: dynamic TP/SL + risk metrics
+from market_analyzer import MarketAnalyzer                   # Key Levels, S/R, Volume
+from context_aware_hmm import ContextAwareHMM                # Pullback detection
+from atr_calculator import ATRCalculator                     # Fallback only (optional)
+
+
+# --- Constants for Configuration ---
+HMM_COMPONENTS = 3
+WAVELET_LEVEL = 4
+MC_SIMS = 25000
+MC_CONF = 0.90
+
+ATR_PERIOD = 14
+ATR_TP_MULTIPLIER = 2.0
+ATR_SL_MULTIPLIER = 1.0
+
+PULLBACK_DISCOUNT_MULTIPLIER = 0.5  # How deep to set the limit order (e.g., 50% of the key level range)
+
+
+class SignalGenerator:
+    def __init__(self, n_hmm_components=HMM_COMPONENTS, wavelet_level=WAVELET_LEVEL, random_state=42):
+        # 1. Denoising/Smoothing
+        self.wavelet_level = wavelet_level
+
+        # 2. Core Models (The Experts)
+        self.hmm_model = MarketHMM(n_components=n_hmm_components, random_state=random_state)
+        self.mc_engine = MonteCarloTradingEngine()  # Optional: directional confidence/diagnostics
+        self.mc_optimizer = MonteCarloOptimizer(n_simulations=MC_SIMS, confidence_level=MC_CONF)
+
+        # 3. Context & Feature Extraction
+        self.market_analyzer = MarketAnalyzer()     # Key Levels, S/R, Volume
+        self.context_analyzer = ContextAwareHMM()   # Pullback Detection
+
+        # 4. Fallback Risk (optional)
+        self.atr_calc = ATRCalculator(
+            atr_period=ATR_PERIOD,
+            tp_multiplier=ATR_TP_MULTIPLIER,
+            sl_multiplier=ATR_SL_MULTIPLIER
+        )
+
+        print(f"✅ SignalGenerator initialized (HMM={n_hmm_components}, MC sims={MC_SIMS}, Wavelet L{wavelet_level})")
+
+    # -------- HMM features --------
+    def _prepare_hmm_features(self, smoothed_data: np.ndarray) -> np.ndarray:
+        # Features: log returns + rolling volatility
+        log_returns = np.diff(np.log(smoothed_data + 1e-10))
+        window = 10
+        if len(log_returns) <= window:
+            return np.zeros((0, 2))
+
+        vol = np.zeros_like(log_returns)
+        for i in range(window, len(log_returns)):
+            vol[i] = np.std(log_returns[i - window:i]) * np.sqrt(252)
+
+        return np.column_stack([log_returns[window:], vol[window:]])
+
+    # -------- main orchestration --------
+    def generate_signals(self, prices: np.ndarray, volumes: np.ndarray) -> Dict:
+        if len(prices) < 100:
+            return self._return_wait("Insufficient data for HMM/Wavelet/MC analysis (requires ~100+ bars)")
+
+        current_price = float(prices[-1])
+
+        # Layer 1: Pre-processing
+        kalman_smoothed = apply_kalman_filter(prices)
+        denoised_prices = denoise_signal_with_wavelets(kalman_smoothed, level=self.wavelet_level)
+
+        # Layer 2: HMM regime identification
+        if not self.hmm_model.is_trained:
+            hmm_features = self._prepare_hmm_features(denoised_prices)
+            if hmm_features.shape[0] == 0:
+                return self._return_wait("Insufficient features for HMM training.")
+            self.hmm_model.train(hmm_features)
+
+        # Predict states on the latest window and compute stability confidence
+        hmm_features_latest = self._prepare_hmm_features(denoised_prices[-120:])  # slightly larger recent window
+        if hmm_features_latest.shape[0] == 0:
+            return self._return_wait("Insufficient features for HMM prediction.")
+        states_latest = self.hmm_model.predict_states(hmm_features_latest)
+        latest_state_index = int(states_latest[-1])
+        state_confidence = self.hmm_model.get_state_stability(states_latest)
+
+        # Layer 3: Market structure and context
+        market_analysis = self.market_analyzer.analyze_market_structure(denoised_prices, volumes)
+        key_levels = market_analysis.get('price_levels', {})
+        hmm_context = self.context_analyzer.analyze_with_context(
+            prices=denoised_prices,
+            volumes=volumes,
+            hmm_state=latest_state_index
+        )
+
+        # Orchestration & discounted entry logic
+        signal_type = hmm_context.get('signal', 'WAIT')
+        base_confidence = float(max(state_confidence, hmm_context.get('confidence', 0.0)))
+        reasoning = hmm_context.get('reasoning', '')
+        order_type = 'MARKET'
+        entry_price = current_price
+
+        if signal_type == 'WAIT':
+            return self._return_wait(reasoning)
+
+        if hmm_context.get('type') == 'PULLBACK_RISK':
+            order_type = 'LIMIT'
+            if signal_type == 'BUY':
+                nearest_support = key_levels.get('nearest_support', current_price)
+                entry_price = float(nearest_support)
+                reasoning = f"PULLBACK/DISCOUNT ENTRY: BUY trend exhaustion. LIMIT at support ({nearest_support:.2f})"
+            elif signal_type == 'SELL':
+                nearest_resistance = key_levels.get('nearest_resistance', current_price)
+                entry_price = float(nearest_resistance)
+                reasoning = f"PULLBACK/DISCOUNT ENTRY: SELL trend exhaustion. LIMIT at resistance ({nearest_resistance:.2f})"
+            base_confidence = min(1.0, base_confidence * 1.1)
+
+        # Layer 4: Dynamic TP/SL via Monte Carlo (primary)
+        mc_result = None
+        try:
+            mc_result = self.mc_optimizer.calculate_tp_sl(
+                prices=denoised_prices,
+                current_price=current_price,
+                signal_type=signal_type,
+                time_horizon=50
+            )
+            tp, sl = float(mc_result['tp']), float(mc_result['sl'])
+        except Exception as e:
+            # Fallback to ATR if MC fails
+            atr_result = self.atr_calc.calculate_tp_sl(denoised_prices, current_price, signal_type)
+            tp, sl = float(atr_result['tp']), float(atr_result['sl'])
+            reasoning += f" | MC error, fell back to ATR ({str(e)})"
+
+        # 5. Risk metrics (always attach)
+        risk_metrics = self._compute_risk_metrics_safe(prices, current_price, tp, sl, signal_type)
+
+        # Enforce minimum R:R from risk metrics
+        if risk_metrics['risk_reward_ratio'] < 0.9:
+            return self._return_wait(f"R:R {risk_metrics['risk_reward_ratio']:.2f}:1 too low (min 0.9:1).")
+
+        # Optional: fast MC confidence validator (pure engine)
+        # You can call self.mc_engine.generate_signal(denoised_prices) and compare regimes if desired.
+
+        return {
+            "order_type": order_type,
+            "entry": entry_price,
+            "tp": tp,
+            "sl": sl,
+            "signal_type": signal_type,
+            "confidence": base_confidence,
+            "reasoning": reasoning,
+            "market_context": hmm_context.get('context', {}),
+            "mc_info": {
+                "mc_volatility": mc_result.get('volatility', None) if mc_result else None,
+                "mc_median_target": mc_result.get('median_target', None) if mc_result else None,
+                "tp_confidence": self.mc_optimizer.confidence_level,
+            },
+            "risk_metrics": risk_metrics
+        }
+
+    def _compute_risk_metrics_safe(self, prices: np.ndarray, current_price: float,
+                                   tp: float, sl: float, signal_type: str) -> Dict[str, float]:
+        """
+        Wrapper to compute risk metrics and return zeros if anything goes wrong.
+        """
+        try:
+            return self.mc_optimizer.calculate_risk_metrics(
+                price_data=prices,
+                current_price=current_price,
+                tp=tp,
+                sl=sl,
+                signal_type=signal_type
+            )
+        except Exception:
+            return {
+                "risk_reward_ratio": 0.0,
+                "potential_profit_pct": 0.0,
+                "potential_loss_pct": 0.0,
+                "prob_tp": 0.0,
+                "prob_sl": 0.0,
+                "expected_value": 0.0,
+                "expected_value_pct": 0.0
+            }
+
+    def _return_wait(self, reason: str) -> Dict:
+        """Return WAIT signal with reason and zeroed risk metrics to avoid N/A in UI."""
+        return {
+            "order_type": "MARKET",
+            "entry": None,
+            "tp": None,
+            "sl": None,
+            "signal_type": "WAIT",
+            "confidence": 0.0,
+            "market_context": {},
+            "reasoning": reason,
+            "risk_metrics": {
+                "risk_reward_ratio": 0.0,
+                "potential_profit_pct": 0.0,
+                "potential_loss_pct": 0.0,
+                "prob_tp": 0.0,
+                "prob_sl": 0.0,
+                "expected_value": 0.0,
+                "expected_value_pct": 0.0
+            }
+        }
