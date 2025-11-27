@@ -56,6 +56,16 @@ class SignalGenerator:
         """
         if not isinstance(raw_price_data, np.ndarray) or raw_price_data.ndim != 1:
             raise ValueError("Input raw_price_data must be a 1D numpy array.")
+        
+        if len(raw_price_data) < 100:
+            return {
+                "entry": None,
+                "tp": None,
+                "sl": None,
+                "signal_type": "WAIT",
+                "market_context": "Insufficient Data",
+                "reasoning": f"Need at least 100 candles, got {len(raw_price_data)}"
+            }
 
         # Use rolling window for HMM training (last 250 candles max)
         MAX_ROLLING_WINDOW = 250
@@ -73,11 +83,20 @@ class SignalGenerator:
         # Ensure enough data for HMM training/prediction
         if len(hmm_features) < self.hmm_model.n_components:
             # print("Not enough data for HMM. Skipping HMM and signal generation.") # Keep this for debugging if needed
-            return {"entry": None, "tp": None, "sl": None, "market_context": "Insufficient Data"}
+            return {
+                "entry": None,
+                "tp": None,
+                "sl": None,
+                "signal_type": "WAIT",
+                "market_context": "Insufficient Data",
+                "reasoning": f"Need {self.hmm_model.n_components} features, got {len(hmm_features)}"
+            }
 
         # 3. HMM State Prediction
         # print("Training and predicting HMM states...") # Suppress intermediate print
-        # self.hmm_model.train(hmm_features) # Removed: HMM training is handled in backtester.py
+        # Train HMM if not already trained or needs retraining
+        if not hasattr(self.hmm_model.model, 'transmat_') or len(hmm_features) > 200:
+            self.hmm_model.train(hmm_features)
         predicted_states = self.hmm_model.predict_states(hmm_features)
         state_probabilities = self.hmm_model.get_state_probabilities(hmm_features)
 
@@ -125,8 +144,8 @@ class SignalGenerator:
             
             # Dynamically identify bullish and bearish states based on the mean of log returns
             # Assuming the first feature in hmm_features is log returns
-            if hasattr(self.hmm_model.hmm, 'means_') and self.hmm_model.hmm.means_.shape[1] > 0:
-                mean_log_returns = self.hmm_model.hmm.means_[:, 0] # Assuming first feature is log returns
+            if hasattr(self.hmm_model.model, 'means_') and self.hmm_model.model.means_.shape[1] > 0:
+                mean_log_returns = self.hmm_model.model.means_[:, 0] # Assuming first feature is log returns
                 bullish_state_idx = np.argmax(mean_log_returns) # State with highest mean log return
                 bearish_state_idx = np.argmin(mean_log_returns) # State with lowest mean log return
             else:
@@ -162,6 +181,8 @@ class SignalGenerator:
                     "sl": stop_loss,
                     "market_context": current_market_context,
                     "signal_type": "BUY",
+                    "confidence": float(prob_bullish),
+                    "reasoning": f"Bullish HMM state detected (prob: {prob_bullish:.2%})",
                     "refined_probability_example": refined_prob[-1] if len(refined_prob) > 0 else None,
                     "monte_carlo": mc_result,
                     "risk_metrics": risk_metrics
@@ -189,16 +210,32 @@ class SignalGenerator:
                     "sl": stop_loss,
                     "market_context": current_market_context,
                     "signal_type": "SELL",
+                    "confidence": float(prob_bearish),
+                    "reasoning": f"Bearish HMM state detected (prob: {prob_bearish:.2%})",
                     "refined_probability_example": refined_prob[-1] if len(refined_prob) > 0 else None,
                     "monte_carlo": mc_result,
                     "risk_metrics": risk_metrics
                 }
             else:
                 # Neutral or uncertain state, no signal
-                return {"entry": None, "tp": None, "sl": None, "market_context": current_market_context}
+                return {
+                    "entry": None,
+                    "tp": None,
+                    "sl": None,
+                    "signal_type": "WAIT",
+                    "market_context": current_market_context,
+                    "reasoning": f"Neutral state detected - confidence too low (Bullish: {prob_bullish:.2f}, Bearish: {prob_bearish:.2f})"
+                }
         else:
             # Not enough data or HMM not trained, no signal
-            return {"entry": None, "tp": None, "sl": None, "market_context": "Insufficient Data"}
+            return {
+                "entry": None,
+                "tp": None,
+                "sl": None,
+                "signal_type": "WAIT",
+                "market_context": "Insufficient Data",
+                "reasoning": "HMM state probabilities unavailable"
+            }
 
         return {
             "entry": entry_point,
