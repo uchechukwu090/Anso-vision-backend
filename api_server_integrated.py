@@ -1,6 +1,6 @@
 """
 API SERVER INTEGRATED - The Central Deployment Point
-This server is the single entry point for all signal requests.
+This server is the single entry point for all signal requests. 
 It delegates all complex logic (HMM, Context, Fusion, Risk) to the ModelManager.
 """
 import os
@@ -15,7 +15,7 @@ import threading
 from typing import Dict
 
 # --- CORE INTEGRATION ---
-# The API sees the intelligence through the ModelManager layer.
+# The API sees the intelligence through the ModelManager layer. 
 from model_manager import get_model_manager
 from risk_manager import get_risk_manager # Import Layer 4 Safety
 
@@ -53,19 +53,19 @@ NEWS_MODEL_URL = os.getenv('NEWS_MODEL_URL', 'https://anso-vision-news-model.onr
 @app.route('/signal/<symbol>', methods=['POST'])
 def generate_signal_route(symbol):
     """
-    Main signal generation endpoint.
-    1. Fetches data.
-    2. Runs pre-trade checks (Risk Manager, News).
+    Main signal generation endpoint. 
+    1. Fetches data. 
+    2. Runs pre-trade checks (Risk Manager, News). 
     3. Calls ModelManager for the integrated signal.
     """
     
     # 1. Input Data Validation
     data = request.json
     if not data or 'prices' not in data or 'volumes' not in data:
-        return jsonify({'signal_type': 'WAIT', 'reasoning': 'Missing price or volume data in request body.'}), 400
+        return jsonify({'signal_type': 'WAIT', 'reasoning': 'Missing price or volume data in request body. '}), 400
     
-    prices = np.array(data.get('prices', []))
-    volumes = np.array(data.get('volumes', []))
+    prices = np.array(data. get('prices', []))
+    volumes = np.array(data. get('volumes', []))
     
     if len(prices) < 100 or len(volumes) < 100:
         return jsonify({'signal_type': 'WAIT', 'reasoning': 'Insufficient data (requires ~100 bars) for integrated HMM/Context analysis.'}), 400
@@ -125,12 +125,12 @@ def train_model_route(symbol):
             print(f"❌ Training for {symbol} failed.")
     
     thread = threading.Thread(target=run_training)
-    thread.start()
+    thread. start()
     
-    return jsonify({'success': True, 'message': f'Training started for {symbol}. Check logs for completion.'}), 200
+    return jsonify({'success': True, 'message': f'Training started for {symbol}.  Check logs for completion. '}), 200
 
 
-@app.route('/status/<symbol>', methods=['GET'])
+@app. route('/status/<symbol>', methods=['GET'])
 def get_model_status(symbol):
     """Get the current training status of the model manager."""
     state = model_manager.get_model_state(symbol)
@@ -138,11 +138,11 @@ def get_model_status(symbol):
         return jsonify({
             'symbol': symbol,
             'is_trained': state.is_trained,
-            'last_trained': state.last_trained.isoformat() if state.last_trained else 'Never',
+            'last_trained': state.last_trained. isoformat() if state.last_trained else 'Never',
             'train_count': state.train_count,
             'needs_retraining': state.needs_retraining(),
         }), 200
-    return jsonify({'symbol': symbol, 'is_trained': False, 'reasoning': 'Model not yet initialized.'}), 404
+    return jsonify({'symbol': symbol, 'is_trained': False, 'reasoning': 'Model not yet initialized. '}), 404
 
 
 @app.route('/health', methods=['GET'])
@@ -175,7 +175,12 @@ def check_news_before_trade() -> tuple[bool, str]:
 
 
 if __name__ == '__main__':
+    # ✅ FIXED: Read PORT from Render environment, default to 5000 for local dev
+    port = int(os.environ.get("PORT", 5000))
+    
     print("🧠 Integrated Trading Engine starting...")
-    print(f"   Model Manager running HMM, Context, ATR, and Discounted Entry Logic.")
-    print(f"   Listening on port 5000 (default)...")
-    app.run(debug=True, port=5000)
+    print(f"   Model Manager running HMM, Monte Carlo Optimizer (Primary), and ATR (Fallback).")
+    print(f"   Listening on port {port}...")
+    
+    # Run Flask app
+    app.run(host="0.0.0.0", port=port, debug=False)
