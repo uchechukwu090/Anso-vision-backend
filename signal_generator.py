@@ -31,12 +31,12 @@ MC_CONF = 0.90    # 90% confidence level for TP/SL quantiles
 
 
 class SignalGenerator:
-    def __init__(self, n_hmm_components=HMM_COMPONENTS, wavelet_level=WAVELET_LEVEL, random_state=42):
+    def __init__(self, n_hmm_components=HMM_COMPONENTS, covariance_type='diag', wavelet_level=WAVELET_LEVEL, random_state=42):
         # 1.  Denoising/Smoothing
         self.wavelet_level = wavelet_level
 
         # 2. Core Models (The Experts)
-        self.hmm_model = MarketHMM(n_components=n_hmm_components, random_state=random_state)
+        self.hmm_model = MarketHMM(n_components=n_hmm_components, covariance_type=covariance_type, random_state=random_state)
         
         # ✅ FIXED: Initialize both Monte Carlo engines
         self.mc_engine = MonteCarloTradingEngine()  # Trend detection & confidence validation
