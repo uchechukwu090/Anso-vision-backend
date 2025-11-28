@@ -192,6 +192,10 @@ class ModelManager:
             print(f"❌ {symbol}: Signal generation failed - {e}")
             return None
     
+    def get_model_state(self, symbol: str) -> Optional[ModelState]:
+        """Get model state object for a symbol"""
+        return self.models.get(symbol)
+    
     def get_model_stats(self, symbol: str) -> dict:
         """Get statistics about a model"""
         model_state = self.models.get(symbol)

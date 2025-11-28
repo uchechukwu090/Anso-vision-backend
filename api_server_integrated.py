@@ -119,10 +119,178 @@ def health_check():
 
 @app.route('/analyze', methods=['POST', 'OPTIONS'])
 def analyze_signal():
+    """
+    Main endpoint for frontend signal analysis
+    Expects: { symbol, candles: [{timestamp, open, high, low, close, volume}], timeframe }
+    Returns: Full signal analysis with BUY/SELL/WAIT
+    """
     if request.method == 'OPTIONS':
         return jsonify({'status': 'ok'}), 200
-    # Placeholder: integrate your SignalGenerator logic here
-    return jsonify({'success': True, 'message': 'Analyze endpoint placeholder'}), 200
+    
+    try:
+        data = request.json
+        symbol = data.get('symbol')
+        candles = data.get('candles', [])
+        timeframe = data.get('timeframe', '1h')
+        
+        if not symbol:
+            return jsonify({
+                'success': False,
+                'error': 'Missing symbol',
+                'signal': 'HOLD',
+                'signal_type': 'ERROR'
+            }), 400
+        
+        if len(candles) < 100:
+            return jsonify({
+                'success': False,
+                'error': f'Insufficient data: Need 100 candles, got {len(candles)}',
+                'symbol': symbol,
+                'signal': 'HOLD',
+                'signal_type': 'ERROR',
+                'entry': 0,
+                'tp': 0,
+                'sl': 0,
+                'confidence': 0,
+                'reasoning': f'Insufficient data: Need 100 candles, got {len(candles)}',
+                'market_context': 'N/A',
+                'market_structure': 'N/A',
+                'risk_metrics': {
+                    'risk_reward_ratio': 0,
+                    'potential_profit_pct': 0,
+                    'potential_loss_pct': 0,
+                    'prob_tp': 0,
+                    'expected_value': 0
+                }
+            }), 400
+        
+        # Extract prices and volumes from candles
+        prices = np.array([c.get('close', 0) for c in candles])
+        volumes = np.array([c.get('volume', 0) for c in candles])
+        
+        # Check for invalid data
+        if np.any(prices <= 0) or np.any(volumes < 0):
+            return jsonify({
+                'success': False,
+                'error': 'Invalid candle data (zero or negative values)',
+                'symbol': symbol,
+                'signal': 'HOLD',
+                'signal_type': 'ERROR'
+            }), 400
+        
+        # Check news before trading
+        trade_allowed, news_reason = check_news_before_trade()
+        if not trade_allowed:
+            return jsonify({
+                'success': True,
+                'symbol': symbol,
+                'signal': 'HOLD',
+                'signal_type': 'WAIT',
+                'entry': float(prices[-1]),
+                'tp': 0,
+                'sl': 0,
+                'confidence': 0,
+                'reasoning': f'Trade Blocked by News: {news_reason}',
+                'market_context': 'High-impact news detected',
+                'market_structure': 'N/A',
+                'timeframe': timeframe,
+                'risk_metrics': {
+                    'risk_reward_ratio': 0,
+                    'potential_profit_pct': 0,
+                    'potential_loss_pct': 0,
+                    'prob_tp': 0,
+                    'expected_value': 0
+                }
+            }), 200
+        
+        # Check risk manager
+        allowed, risk_reason = risk_manager.should_allow_signal(symbol, 'UNKNOWN')
+        if not allowed:
+            return jsonify({
+                'success': True,
+                'symbol': symbol,
+                'signal': 'HOLD',
+                'signal_type': 'WAIT',
+                'entry': float(prices[-1]),
+                'tp': 0,
+                'sl': 0,
+                'confidence': 0,
+                'reasoning': f'Risk Manager Blocked: {risk_reason}',
+                'market_context': 'Risk limits exceeded',
+                'market_structure': 'N/A',
+                'timeframe': timeframe,
+                'risk_metrics': {
+                    'risk_reward_ratio': 0,
+                    'potential_profit_pct': 0,
+                    'potential_loss_pct': 0,
+                    'prob_tp': 0,
+                    'expected_value': 0
+                }
+            }), 200
+        
+        # Generate signal using model manager
+        signal_result = model_manager.generate_signal(symbol, prices, volumes)
+        
+        if signal_result is None:
+            return jsonify({
+                'success': False,
+                'error': 'Signal generation failed',
+                'symbol': symbol,
+                'signal': 'HOLD',
+                'signal_type': 'ERROR'
+            }), 500
+        
+        # Map signal_type to signal for frontend compatibility
+        signal_type = signal_result.get('signal_type', 'WAIT')
+        signal_map = {'BUY': 'BUY', 'SELL': 'SELL', 'WAIT': 'HOLD'}
+        signal = signal_map.get(signal_type, 'HOLD')
+        
+        # Record signal if not WAIT
+        if signal_type != 'WAIT':
+            risk_manager.record_signal(symbol, signal_type, signal_result.get('confidence', 0.0))
+        
+        # Build response matching frontend expectations
+        response = {
+            'success': True,
+            'symbol': symbol,
+            'signal': signal,
+            'signal_type': signal_type,
+            'entry': float(signal_result.get('entry', prices[-1])),
+            'tp': float(signal_result.get('tp', 0)),
+            'sl': float(signal_result.get('sl', 0)),
+            'confidence': float(signal_result.get('confidence', 0)),
+            'reasoning': signal_result.get('reasoning', 'No reasoning provided'),
+            'market_context': signal_result.get('market_context', 'N/A'),
+            'market_structure': signal_result.get('market_structure', 'N/A'),
+            'timeframe': timeframe,
+            'risk_metrics': signal_result.get('risk_metrics', {
+                'risk_reward_ratio': 0,
+                'potential_profit_pct': 0,
+                'potential_loss_pct': 0,
+                'prob_tp': 0,
+                'expected_value': 0
+            }),
+            'hmm_state': {
+                '0_bearish': 0.33,
+                '1_neutral': 0.34,
+                '2_bullish': 0.33
+            }
+        }
+        
+        print(f"✅ Signal generated for {symbol}: {signal_type}")
+        return jsonify(response), 200
+        
+    except Exception as e:
+        print(f"❌ Error in /analyze endpoint: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        
+        return jsonify({
+            'success': False,
+            'error': f'Internal error: {str(e)}',
+            'signal': 'HOLD',
+            'signal_type': 'ERROR'
+        }), 500
 
 
 @app.route('/webhook/live', methods=['POST'])
