@@ -235,11 +235,22 @@ def analyze_signal():
             }), 200
         
         # Generate signal using model manager
+        print(f"\n🔄 Calling model_manager.generate_signal()...")
+        print(f"   Symbol: {symbol}")
+        print(f"   Prices shape: {prices.shape}")
+        print(f"   Volumes shape: {volumes.shape}")
+        print(f"   Price range: {prices.min():.2f} - {prices.max():.2f}")
+        
         try:
             signal_result = model_manager.generate_signal(symbol, prices, volumes)
+            print(f"✅ generate_signal() returned: {type(signal_result)}")
+            
         except Exception as gen_error:
-            print(f"❌ Signal generation error for {symbol}: {str(gen_error)}")
+            print(f"❌ EXCEPTION in generate_signal():")
+            print(f"   Type: {type(gen_error).__name__}")
+            print(f"   Message: {str(gen_error)}")
             import traceback
+            print("   Full traceback:")
             traceback.print_exc()
             
             return jsonify({

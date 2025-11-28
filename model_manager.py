@@ -82,49 +82,72 @@ class ModelManager:
         Returns:
             bool: True if training succeeded
         """
+        print(f"\n🎯 train_model() called for {symbol}")
+        print(f"   Prices: {len(prices)} candles")
+        print(f"   Volumes: {len(volumes) if volumes is not None else 'None'}")
+        print(f"   Force: {force}")
+        
         model_state = self.get_or_create_model(symbol)
         
         with model_state.lock:
             # Check if training is needed
             if not force and not model_state.needs_retraining():
+                print(f"   ℹ️ Model already trained and fresh")
                 return True  # Already trained and fresh
             
             try:
                 # Validate data
                 if len(prices) < 100:
-                    print(f"⚠️ {symbol}: Insufficient data ({len(prices)} candles)")
+                    print(f"   ⚠️ {symbol}: Insufficient data ({len(prices)} candles)")
                     return False
                 
                 # Use last 250 candles for training
                 train_data = prices[-250:] if len(prices) > 250 else prices
+                print(f"   📊 Using {len(train_data)} candles for training")
                 
                 # Initialize signal generator if needed
                 if model_state.signal_generator is None:
-                    model_state.signal_generator = SignalGenerator(
-                        n_hmm_components=self.n_hmm_components,
-                        covariance_type=self.covariance_type,
-                        random_state=self.random_state
-                    )
+                    print(f"   🆕 Creating new SignalGenerator...")
+                    try:
+                        model_state.signal_generator = SignalGenerator(
+                            n_hmm_components=self.n_hmm_components,
+                            covariance_type=self.covariance_type,
+                            random_state=self.random_state
+                        )
+                        print(f"   ✅ SignalGenerator created successfully")
+                    except Exception as sg_error:
+                        print(f"   ❌ SignalGenerator creation failed: {sg_error}")
+                        import traceback
+                        traceback.print_exc()
+                        return False
                 
                 # Train HMM
+                print(f"   🧠 Preparing HMM features...")
                 hmm_features = model_state.signal_generator._prepare_hmm_features(train_data)
+                print(f"   ✅ Features prepared: shape {hmm_features.shape}")
                 
                 if len(hmm_features) < self.n_hmm_components:
-                    print(f"⚠️ {symbol}: Insufficient features for HMM")
+                    print(f"   ⚠️ {symbol}: Insufficient features for HMM ({len(hmm_features)} < {self.n_hmm_components})")
                     return False
                 
+                print(f"   🎯 Training HMM model...")
                 model_state.signal_generator.hmm_model.train(hmm_features)
+                print(f"   ✅ HMM training complete")
                 
                 # Update state
                 model_state.is_trained = True
                 model_state.last_trained = datetime.now()
                 model_state.train_count = 0
                 
-                print(f"✅ {symbol}: Model trained ({len(train_data)} candles)")
+                print(f"   ✅ {symbol}: Model trained successfully ({len(train_data)} candles)")
                 return True
                 
             except Exception as e:
-                print(f"❌ {symbol}: Training failed - {e}")
+                print(f"   ❌ {symbol}: Training failed")
+                print(f"   Exception type: {type(e).__name__}")
+                print(f"   Exception message: {str(e)}")
+                import traceback
+                traceback.print_exc()
                 return False
     
     def generate_signal(self, symbol: str, prices: np.ndarray, 
