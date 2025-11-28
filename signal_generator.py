@@ -58,7 +58,7 @@ class SignalGenerator:
         
         print(f"✅ SignalGenerator initialized")
         print(f"   • HMM components: {n_hmm_components}")
-        print(f"   • Monte Carlo Optimizer: PRIMARY (Sims: {MC_SIMS}, CL: {MC_CONF:. 0%})")
+        print(f"   • Monte Carlo Optimizer: PRIMARY (Sims: {MC_SIMS}, CL: {MC_CONF:.0%})")
         print(f"   • ATR Calculator: FALLBACK")
         print(f"   • Pure MC Engine: Trend detection")
 
