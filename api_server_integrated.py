@@ -133,6 +133,12 @@ def analyze_signal():
         candles = data.get('candles', [])
         timeframe = data.get('timeframe', '1h')
         
+        print(f"\n{'='*70}")
+        print(f"📊 /analyze request for {symbol}")
+        print(f"   Candles: {len(candles)}")
+        print(f"   Timeframe: {timeframe}")
+        print(f"{'='*70}")
+        
         if not symbol:
             return jsonify({
                 'success': False,
@@ -229,15 +235,59 @@ def analyze_signal():
             }), 200
         
         # Generate signal using model manager
-        signal_result = model_manager.generate_signal(symbol, prices, volumes)
-        
-        if signal_result is None:
+        try:
+            signal_result = model_manager.generate_signal(symbol, prices, volumes)
+        except Exception as gen_error:
+            print(f"❌ Signal generation error for {symbol}: {str(gen_error)}")
+            import traceback
+            traceback.print_exc()
+            
             return jsonify({
                 'success': False,
-                'error': 'Signal generation failed',
+                'error': f'Signal generation error: {str(gen_error)}',
                 'symbol': symbol,
                 'signal': 'HOLD',
-                'signal_type': 'ERROR'
+                'signal_type': 'ERROR',
+                'entry': float(prices[-1]),
+                'tp': 0,
+                'sl': 0,
+                'confidence': 0,
+                'reasoning': f'Error during signal generation: {str(gen_error)}',
+                'market_context': 'N/A',
+                'market_structure': 'N/A',
+                'timeframe': timeframe,
+                'risk_metrics': {
+                    'risk_reward_ratio': 0,
+                    'potential_profit_pct': 0,
+                    'potential_loss_pct': 0,
+                    'prob_tp': 0,
+                    'expected_value': 0
+                }
+            }), 500
+        
+        if signal_result is None:
+            print(f"❌ Signal generation returned None for {symbol}")
+            return jsonify({
+                'success': False,
+                'error': 'Signal generation returned None (model may not be trained)',
+                'symbol': symbol,
+                'signal': 'HOLD',
+                'signal_type': 'ERROR',
+                'entry': float(prices[-1]),
+                'tp': 0,
+                'sl': 0,
+                'confidence': 0,
+                'reasoning': 'Model training failed or signal generation returned no result',
+                'market_context': 'N/A',
+                'market_structure': 'N/A',
+                'timeframe': timeframe,
+                'risk_metrics': {
+                    'risk_reward_ratio': 0,
+                    'potential_profit_pct': 0,
+                    'potential_loss_pct': 0,
+                    'prob_tp': 0,
+                    'expected_value': 0
+                }
             }), 500
         
         # Map signal_type to signal for frontend compatibility

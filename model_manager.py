@@ -69,13 +69,14 @@ class ModelManager:
                 print(f"📊 Created new model state for {symbol}")
             return self.models[symbol]
     
-    def train_model(self, symbol: str, prices: np.ndarray, force: bool = False) -> bool:
+    def train_model(self, symbol: str, prices: np.ndarray, volumes: np.ndarray = None, force: bool = False) -> bool:
         """
         Train or retrain model for a symbol
         
         Args:
             symbol: Trading symbol
             prices: Price array (minimum 250 candles recommended)
+            volumes: Volume array (optional)
             force: Force retraining even if not needed
             
         Returns:
