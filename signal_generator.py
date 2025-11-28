@@ -115,13 +115,13 @@ class SignalGenerator:
         # 2b. Get HMM State
         hmm_features_latest = self._prepare_hmm_features(denoised_prices[-100:])
         latest_state_index = self.hmm_model.predict(hmm_features_latest)[-1]
-        state_confidence = self.hmm_model. get_state_stability(self.hmm_model.state_history)
+        state_confidence = self.hmm_model.get_state_stability(self.hmm_model.state_history)
         print(f"   ✅ HMM State: {latest_state_index} (confidence: {state_confidence:.1%})")
         
         # 2c. Market Structure
         market_analysis = self.market_analyzer.analyze_market_structure(denoised_prices, volumes)
         key_levels = market_analysis['price_levels']
-        print(f"   ✅ Support: {key_levels. get('nearest_support', 0):.2f} | Resistance: {key_levels.get('nearest_resistance', 0):.2f}")
+        print(f"   ✅ Support: {key_levels.get('nearest_support', 0):.2f} | Resistance: {key_levels.get('nearest_resistance', 0):.2f}")
         
         # 2d. Context Analysis
         hmm_context = self.context_analyzer.analyze_with_context(
