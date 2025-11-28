@@ -233,7 +233,7 @@ class SignalGenerator:
             'potential_profit_pct': profit_pct,
             'potential_loss_pct': loss_pct,
             'prob_tp_hit': prob_tp,
-            'prob_sl_hit': float(1. 0 - prob_tp),
+            'prob_sl_hit': float(1.0 - prob_tp),
             'expected_value': expected_value,
             'expected_value_pct': expected_value_pct
         }
