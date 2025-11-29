@@ -56,16 +56,27 @@ class ContextAwareHMM:
         return signal
 
     def _detect_actual_trend(self, prices):
-        # Use last 20 closes to compute deviation from average
+        """Enhanced trend detection using linear regression"""
         recent = prices[-20:]
-        average = np.mean(recent)
-        current = prices[-1]
-        trend_strength = abs(current - average) / average if average != 0 else 0
-
-        # Threshold avoids classifying minor noise as trend
-        if current > average and trend_strength > 0.01:
+        
+        # Use linear regression slope
+        x = np.arange(len(recent))
+        y = recent
+        
+        # Calculate slope
+        slope = np.polyfit(x, y, 1)[0]
+        
+        # Calculate R-squared for trend strength
+        correlation = np.corrcoef(x, y)[0, 1]
+        
+        # Calculate percentage change
+        pct_change = (recent[-1] - recent[0]) / recent[0] * 100 if recent[0] != 0 else 0
+        
+        # Lower threshold: 0.3% instead of 1%
+        # Strong correlation (>0.7) OR significant % change
+        if (slope > 0 and abs(correlation) > 0.5 and pct_change > 0.3) or pct_change > 1.0:
             return Trend.UPTREND
-        elif current < average and trend_strength > 0.01:
+        elif (slope < 0 and abs(correlation) > 0.5 and pct_change < -0.3) or pct_change < -1.0:
             return Trend.DOWNTREND
         else:
             return Trend.SIDEWAYS
@@ -109,13 +120,23 @@ class ContextAwareHMM:
             return "Continuous trend"
 
     def _calculate_trend_strength(self, prices):
-        # Normalized distance from 20-period average (capped at 1 for stability)
+        """Enhanced trend strength using correlation"""
         recent = prices[-20:]
+        x = np.arange(len(recent))
+        y = recent
+        
+        # Calculate correlation coefficient
+        correlation = np.corrcoef(x, y)[0, 1]
+        
+        # Also measure price deviation from mean
         average = np.mean(recent)
         current = prices[-1]
-        if average == 0:
-            return 0.0
-        return float(min(abs(current - average) / average, 1))
+        deviation = abs(current - average) / average if average != 0 else 0
+        
+        # Combine both: correlation shows trend consistency, deviation shows magnitude
+        strength = (abs(correlation) * 0.7 + deviation * 0.3)
+        
+        return float(min(strength, 1.0))
 
     def _make_contextual_decision(self, hmm_state, actual_trend, volume_level, prices):
         # Map int HMM state to enum for readable comparisons
