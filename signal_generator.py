@@ -23,11 +23,15 @@ WAVELET_LEVEL = 4
 ATR_PERIOD = 14
 ATR_TP_MULTIPLIER = 2.0
 ATR_SL_MULTIPLIER = 1.0
-PULLBACK_DISCOUNT_MULTIPLIER = 0.5 # How deep to set the limit order (e.g., 50% of the key level range)
+PULLBACK_DISCOUNT_MULTIPLIER = 0.5
 
 # ✅ Monte Carlo Optimizer Constants
 MC_SIMS = 25_000  # Number of simulations
 MC_CONF = 0.90    # 90% confidence level for TP/SL quantiles
+
+# ✅ MINIMUM DATA REQUIREMENTS
+MIN_CANDLES_FOR_TRAINING = 200  # Minimum candles needed for stable HMM
+MIN_CANDLES_FOR_SIGNAL = 150    # Minimum for signal generation
 
 
 class SignalGenerator:
@@ -63,15 +67,41 @@ class SignalGenerator:
         print(f"   • Pure MC Engine: Trend detection")
 
     def _prepare_hmm_features(self, smoothed_data):
-        """Prepare features for HMM training"""
+        """Prepare features for HMM training - ENHANCED VERSION"""
+        if len(smoothed_data) < 20:
+            raise ValueError(f"Need at least 20 candles for feature preparation, got {len(smoothed_data)}")
+        
+        # 1. Log returns
         log_returns = np.diff(np.log(smoothed_data + 1e-10))
-        volatility = np.zeros_like(log_returns)
+        
+        # 2. Rolling volatility (normalized)
         window = 10
+        volatility = np.zeros_like(log_returns)
         
         for i in range(window, len(log_returns)):
-            volatility[i] = np.std(log_returns[i-window:i]) * np.sqrt(252)
+            volatility[i] = np.std(log_returns[i-window:i])
         
-        return np.column_stack([log_returns[window:], volatility[window:]])
+        # Normalize volatility to prevent scale issues
+        vol_mean = np.mean(volatility[window:])
+        vol_std = np.std(volatility[window:])
+        if vol_std > 0:
+            volatility_normalized = (volatility - vol_mean) / vol_std
+        else:
+            volatility_normalized = volatility
+        
+        # 3. Momentum (rate of change)
+        momentum = np.zeros_like(log_returns)
+        for i in range(window, len(log_returns)):
+            momentum[i] = log_returns[i-window:i].sum()  # Cumulative return over window
+        
+        # Stack features: [returns, volatility, momentum]
+        features = np.column_stack([
+            log_returns[window:], 
+            volatility_normalized[window:],
+            momentum[window:]
+        ])
+        
+        return features
 
     def generate_signals(self, prices: np.ndarray, volumes: np.ndarray = None) -> Dict:
         """
@@ -89,8 +119,8 @@ class SignalGenerator:
             Dict: ALWAYS returns a dict, NEVER None
         """
         try:
-            if len(prices) < 100:
-                return self._return_wait("Insufficient data (requires ~100 bars)")
+            if len(prices) < MIN_CANDLES_FOR_SIGNAL:
+                return self._return_wait(f"Insufficient data: Need {MIN_CANDLES_FOR_SIGNAL} candles, got {len(prices)}. Please increase timeframe data.")
 
             if volumes is None:
                 volumes = np.ones_like(prices)  # Dummy volumes if not provided

@@ -147,10 +147,10 @@ def analyze_signal():
                 'signal_type': 'ERROR'
             }), 400
         
-        if len(candles) < 100:
+        if len(candles) < 200:
             return jsonify({
                 'success': False,
-                'error': f'Insufficient data: Need 100 candles, got {len(candles)}',
+                'error': f'Insufficient data: Need 200 candles for stable HMM training, got {len(candles)}',
                 'symbol': symbol,
                 'signal': 'HOLD',
                 'signal_type': 'ERROR',
@@ -158,7 +158,7 @@ def analyze_signal():
                 'tp': 0,
                 'sl': 0,
                 'confidence': 0,
-                'reasoning': f'Insufficient data: Need 100 candles, got {len(candles)}',
+                'reasoning': f'Insufficient data: HMM requires 200 candles for reliable predictions. Got {len(candles)}. Please fetch more historical data or use a smaller timeframe.',
                 'market_context': 'N/A',
                 'market_structure': 'N/A',
                 'risk_metrics': {

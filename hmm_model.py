@@ -4,15 +4,18 @@ from hmmlearn import hmm
 class MarketHMM:
     def __init__(self, n_components=3, n_iter=100, covariance_type='diag', random_state=None, 
                  smoothing_window=12, min_state_duration=3, state_switch_threshold=0.75):
-        """Hidden Markov Model for market context - FIXED VERSION"""
-        # FIX: Set init_params to empty string to avoid warnings
+        """Hidden Markov Model for market context - REGULARIZED VERSION"""
+        # FIX: Add regularization to prevent overfitting
         self.model = hmm.GaussianHMM(
             n_components=n_components,
             covariance_type=covariance_type,
             n_iter=n_iter,
             random_state=random_state,
-            init_params='',  # ← CRITICAL FIX: Don't auto-initialize
-            params='stmc'     # But allow training to update all params
+            init_params='',
+            params='stmc',
+            # ✅ ADD REGULARIZATION
+            tol=1e-2,  # Higher tolerance = less overfitting
+            min_covar=1e-3  # Minimum covariance = prevents zero variance states
         )
         self.n_components = n_components
         self.smoothing_window = smoothing_window
