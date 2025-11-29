@@ -118,7 +118,8 @@ class SignalGenerator:
             
             # 2b. Get HMM State
             hmm_features_latest = self._prepare_hmm_features(denoised_prices[-100:])
-            latest_state_index = self.hmm_model.predict(hmm_features_latest)[-1]
+            latest_state_index = self.hmm_model.predict_states(hmm_features_latest)[-1]
+            self.hmm_model.state_history = self.hmm_model.predict_states(hmm_features_latest)
             state_confidence = self.hmm_model.get_state_stability(self.hmm_model.state_history)
             print(f"   ✅ HMM State: {latest_state_index} (confidence: {state_confidence:.1%})")
             
@@ -255,9 +256,19 @@ class SignalGenerator:
         """Return WAIT signal"""
         return {
             "signal_type": "WAIT",
-            "entry": None,
-            "tp": None,
-            "sl": None,
+            "entry": 0.0,  # Changed from None to 0.0
+            "tp": 0.0,      # Changed from None to 0.0
+            "sl": 0.0,      # Changed from None to 0.0
             "confidence": 0.0,
-            "reasoning": reason
+            "reasoning": reason,
+            "market_context": "N/A",
+            "risk_metrics": {
+                "risk_reward_ratio": 0.0,
+                "potential_profit_pct": 0.0,
+                "potential_loss_pct": 0.0,
+                "prob_tp_hit": 0.0,
+                "prob_sl_hit": 0.0,
+                "expected_value": 0.0,
+                "expected_value_pct": 0.0
+            }
         }

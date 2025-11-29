@@ -306,14 +306,23 @@ def analyze_signal():
             risk_manager.record_signal(symbol, signal_type, signal_result.get('confidence', 0.0))
         
         # Build response matching frontend expectations
+        entry_value = signal_result.get('entry', prices[-1])
+        tp_value = signal_result.get('tp', 0)
+        sl_value = signal_result.get('sl', 0)
+        
+        # Ensure values are not None before converting to float
+        entry_value = float(entry_value if entry_value is not None else prices[-1])
+        tp_value = float(tp_value if tp_value is not None else 0)
+        sl_value = float(sl_value if sl_value is not None else 0)
+        
         response = {
             'success': True,
             'symbol': symbol,
             'signal': signal,
             'signal_type': signal_type,
-            'entry': float(signal_result.get('entry', prices[-1])),
-            'tp': float(signal_result.get('tp', 0)),
-            'sl': float(signal_result.get('sl', 0)),
+            'entry': entry_value,
+            'tp': tp_value,
+            'sl': sl_value,
             'confidence': float(signal_result.get('confidence', 0)),
             'reasoning': signal_result.get('reasoning', 'No reasoning provided'),
             'market_context': signal_result.get('market_context', 'N/A'),
