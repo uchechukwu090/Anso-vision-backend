@@ -97,120 +97,120 @@ class SignalGenerator:
 
             current_price = prices[-1]
 
-        # --- Layer 1: Data Pre-Processing ---
-        print("\n" + "="*70)
-        print("🧠 SIGNAL GENERATION PIPELINE")
-        print("="*70)
-        
-        print("\n1️⃣ DATA PRE-PROCESSING")
-        kalman_smoothed = apply_kalman_filter(prices)
-        denoised_prices = denoise_signal_with_wavelets(kalman_smoothed, level=self.wavelet_level)
-        print(f"   ✅ Kalman + Wavelet smoothing applied")
-        
-        # --- Layer 2: Core Models (Get Opinions) ---
-        print("\n2️⃣ MARKET ANALYSIS")
-        
-        # 2a. Train HMM if needed
-        if not self.hmm_model.is_trained:
-            hmm_features = self._prepare_hmm_features(denoised_prices)
-            self.hmm_model.train(hmm_features)
-            print(f"   ✅ HMM trained")
-        
-        # 2b. Get HMM State
-        hmm_features_latest = self._prepare_hmm_features(denoised_prices[-100:])
-        latest_state_index = self.hmm_model.predict(hmm_features_latest)[-1]
-        state_confidence = self.hmm_model.get_state_stability(self.hmm_model.state_history)
-        print(f"   ✅ HMM State: {latest_state_index} (confidence: {state_confidence:.1%})")
-        
-        # 2c. Market Structure
-        market_analysis = self.market_analyzer.analyze_market_structure(denoised_prices, volumes)
-        key_levels = market_analysis['price_levels']
-        print(f"   ✅ Support: {key_levels.get('nearest_support', 0):.2f} | Resistance: {key_levels.get('nearest_resistance', 0):.2f}")
-        
-        # 2d. Context Analysis
-        hmm_context = self.context_analyzer.analyze_with_context(
-            prices=denoised_prices,
-            volumes=volumes,
-            hmm_state=latest_state_index
-        )
-        print(f"   ✅ Context: {hmm_context['context']}")
-        
-        # --- Layer 3: Signal Decision ---
-        print("\n3️⃣ SIGNAL DECISION")
-        
-        signal_type = hmm_context['signal']
-        base_confidence = max(state_confidence, hmm_context['confidence'])
-        reasoning = hmm_context['reasoning']
-        
-        if signal_type == 'WAIT':
-            return self._return_wait(reasoning)
-        
-        print(f"   ✅ Signal: {signal_type} (confidence: {base_confidence:.1%})")
-        
-        # --- Layer 4: ✅ MONTE CARLO OPTIMIZER (PRIMARY TP/SL) ---
-        print("\n4️⃣ TP/SL CALCULATION (Monte Carlo Optimizer - PRIMARY)")
-        
-        try:
-            mc_result = self.mc_optimizer.calculate_tp_sl(
+            # --- Layer 1: Data Pre-Processing ---
+            print("\n" + "="*70)
+            print("🧠 SIGNAL GENERATION PIPELINE")
+            print("="*70)
+            
+            print("\n1️⃣ DATA PRE-PROCESSING")
+            kalman_smoothed = apply_kalman_filter(prices)
+            denoised_prices = denoise_signal_with_wavelets(kalman_smoothed, level=self.wavelet_level)
+            print(f"   ✅ Kalman + Wavelet smoothing applied")
+            
+            # --- Layer 2: Core Models (Get Opinions) ---
+            print("\n2️⃣ MARKET ANALYSIS")
+            
+            # 2a. Train HMM if needed
+            if not self.hmm_model.is_trained:
+                hmm_features = self._prepare_hmm_features(denoised_prices)
+                self.hmm_model.train(hmm_features)
+                print(f"   ✅ HMM trained")
+            
+            # 2b. Get HMM State
+            hmm_features_latest = self._prepare_hmm_features(denoised_prices[-100:])
+            latest_state_index = self.hmm_model.predict(hmm_features_latest)[-1]
+            state_confidence = self.hmm_model.get_state_stability(self.hmm_model.state_history)
+            print(f"   ✅ HMM State: {latest_state_index} (confidence: {state_confidence:.1%})")
+            
+            # 2c. Market Structure
+            market_analysis = self.market_analyzer.analyze_market_structure(denoised_prices, volumes)
+            key_levels = market_analysis['price_levels']
+            print(f"   ✅ Support: {key_levels.get('nearest_support', 0):.2f} | Resistance: {key_levels.get('nearest_resistance', 0):.2f}")
+            
+            # 2d. Context Analysis
+            hmm_context = self.context_analyzer.analyze_with_context(
                 prices=denoised_prices,
-                current_price=current_price,
-                signal_type=signal_type,
-                time_horizon=50  # 50-bar projection
+                volumes=volumes,
+                hmm_state=latest_state_index
             )
-            tp = float(mc_result['tp'])
-            sl = float(mc_result['sl'])
+            print(f"   ✅ Context: {hmm_context['context']}")
             
-            print(f"   ✅ Monte Carlo Success")
-            print(f"      Entry: {current_price:.2f}")
-            print(f"      TP: {tp:.2f} (from {current_price:.2f})")
-            print(f"      SL: {sl:.2f}")
-            print(f"      Volatility: {mc_result['volatility']:.2%}")
+            # --- Layer 3: Signal Decision ---
+            print("\n3️⃣ SIGNAL DECISION")
             
-            tp_sl_source = "Monte Carlo Optimizer"
+            signal_type = hmm_context['signal']
+            base_confidence = max(state_confidence, hmm_context['confidence'])
+            reasoning = hmm_context['reasoning']
             
-        except Exception as e:
-            # ⚠️ FALLBACK: Use ATR if Monte Carlo fails
-            print(f"   ⚠️ Monte Carlo failed: {str(e)}")
-            print(f"   ⏮️ FALLBACK to ATR Calculator")
+            if signal_type == 'WAIT':
+                return self._return_wait(reasoning)
             
-            atr_result = self.atr_calc.calculate_tp_sl(denoised_prices, current_price, signal_type)
-            tp = float(atr_result['tp'])
-            sl = float(atr_result['sl'])
+            print(f"   ✅ Signal: {signal_type} (confidence: {base_confidence:.1%})")
             
-            print(f"      Entry: {current_price:.2f}")
-            print(f"      TP: {tp:.2f}")
-            print(f"      SL: {sl:.2f}")
-            print(f"      ATR: {atr_result['atr']:.2f}")
+            # --- Layer 4: ✅ MONTE CARLO OPTIMIZER (PRIMARY TP/SL) ---
+            print("\n4️⃣ TP/SL CALCULATION (Monte Carlo Optimizer - PRIMARY)")
             
-            tp_sl_source = "ATR (Fallback)"
-            reasoning += f" | MC error, fell back to ATR"
-        
-        # --- Layer 5: Risk Metrics ---
-        print("\n5️⃣ RISK METRICS")
-        
-        risk_metrics = self._compute_risk_metrics(denoised_prices, current_price, tp, sl, signal_type)
-        print(f"   ✅ R:R: {risk_metrics['risk_reward_ratio']:.2f}:1")
-        print(f"   ✅ Expected Value: {risk_metrics['expected_value_pct']:.2f}%")
-        
-        # Enforce minimum R:R
-        if risk_metrics['risk_reward_ratio'] < 0.9:
-            return self._return_wait(f"R:R {risk_metrics['risk_reward_ratio']:.2f}:1 too low (min 0.9:1)")
-        
-        # --- Final Signal Assembly ---
-        print("\n✅ SIGNAL APPROVED")
-        print("="*70 + "\n")
-        
-        return {
-            "signal_type": signal_type,
-            "entry": float(current_price),
-            "tp": float(tp),
-            "sl": float(sl),
-            "confidence": float(base_confidence),
-            "reasoning": reasoning,
-            "tp_sl_source": tp_sl_source,  # ✅ Show which method was used
-            "market_context": hmm_context['context'],
-            "risk_metrics": risk_metrics,
-        }
+            try:
+                mc_result = self.mc_optimizer.calculate_tp_sl(
+                    prices=denoised_prices,
+                    current_price=current_price,
+                    signal_type=signal_type,
+                    time_horizon=50  # 50-bar projection
+                )
+                tp = float(mc_result['tp'])
+                sl = float(mc_result['sl'])
+                
+                print(f"   ✅ Monte Carlo Success")
+                print(f"      Entry: {current_price:.2f}")
+                print(f"      TP: {tp:.2f} (from {current_price:.2f})")
+                print(f"      SL: {sl:.2f}")
+                print(f"      Volatility: {mc_result['volatility']:.2%}")
+                
+                tp_sl_source = "Monte Carlo Optimizer"
+                
+            except Exception as e:
+                # ⚠️ FALLBACK: Use ATR if Monte Carlo fails
+                print(f"   ⚠️ Monte Carlo failed: {str(e)}")
+                print(f"   ⏮️ FALLBACK to ATR Calculator")
+                
+                atr_result = self.atr_calc.calculate_tp_sl(denoised_prices, current_price, signal_type)
+                tp = float(atr_result['tp'])
+                sl = float(atr_result['sl'])
+                
+                print(f"      Entry: {current_price:.2f}")
+                print(f"      TP: {tp:.2f}")
+                print(f"      SL: {sl:.2f}")
+                print(f"      ATR: {atr_result['atr']:.2f}")
+                
+                tp_sl_source = "ATR (Fallback)"
+                reasoning += f" | MC error, fell back to ATR"
+            
+            # --- Layer 5: Risk Metrics ---
+            print("\n5️⃣ RISK METRICS")
+            
+            risk_metrics = self._compute_risk_metrics(denoised_prices, current_price, tp, sl, signal_type)
+            print(f"   ✅ R:R: {risk_metrics['risk_reward_ratio']:.2f}:1")
+            print(f"   ✅ Expected Value: {risk_metrics['expected_value_pct']:.2f}%")
+            
+            # Enforce minimum R:R
+            if risk_metrics['risk_reward_ratio'] < 0.9:
+                return self._return_wait(f"R:R {risk_metrics['risk_reward_ratio']:.2f}:1 too low (min 0.9:1)")
+            
+            # --- Final Signal Assembly ---
+            print("\n✅ SIGNAL APPROVED")
+            print("="*70 + "\n")
+            
+            return {
+                "signal_type": signal_type,
+                "entry": float(current_price),
+                "tp": float(tp),
+                "sl": float(sl),
+                "confidence": float(base_confidence),
+                "reasoning": reasoning,
+                "tp_sl_source": tp_sl_source,  # ✅ Show which method was used
+                "market_context": hmm_context['context'],
+                "risk_metrics": risk_metrics,
+            }
         
         except Exception as e:
             # ❗ CRITICAL: Catch ANY error and return WAIT signal
