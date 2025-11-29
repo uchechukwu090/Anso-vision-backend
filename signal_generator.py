@@ -79,19 +79,23 @@ class SignalGenerator:
         
         Flow:
         1. Data Pre-Processing (Kalman + Wavelet)
-        2.  HMM State Detection
+        2. HMM State Detection
         3. Market Structure Analysis
         4. ✅ MONTE CARLO OPTIMIZER for TP/SL (PRIMARY)
         5. ATR Fallback if MC fails
         6. Risk Validation
+        
+        Returns:
+            Dict: ALWAYS returns a dict, NEVER None
         """
-        if len(prices) < 100:
-            return self._return_wait("Insufficient data (requires ~100 bars)")
+        try:
+            if len(prices) < 100:
+                return self._return_wait("Insufficient data (requires ~100 bars)")
 
-        if volumes is None:
-            volumes = np.ones_like(prices)  # Dummy volumes if not provided
+            if volumes is None:
+                volumes = np.ones_like(prices)  # Dummy volumes if not provided
 
-        current_price = prices[-1]
+            current_price = prices[-1]
 
         # --- Layer 1: Data Pre-Processing ---
         print("\n" + "="*70)
@@ -207,6 +211,15 @@ class SignalGenerator:
             "market_context": hmm_context['context'],
             "risk_metrics": risk_metrics,
         }
+        
+        except Exception as e:
+            # ❗ CRITICAL: Catch ANY error and return WAIT signal
+            error_msg = f"Signal generation exception: {type(e).__name__}: {str(e)}"
+            print(f"\n❌ CRITICAL ERROR in generate_signals():")
+            print(f"   {error_msg}")
+            import traceback
+            traceback.print_exc()
+            return self._return_wait(error_msg)
 
     def _compute_risk_metrics(self, prices: np.ndarray, current_price: float, 
                              tp: float, sl: float, signal_type: str) -> Dict:

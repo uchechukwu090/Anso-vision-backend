@@ -241,21 +241,15 @@ def analyze_signal():
         print(f"   Volumes shape: {volumes.shape}")
         print(f"   Price range: {prices.min():.2f} - {prices.max():.2f}")
         
-        try:
-            signal_result = model_manager.generate_signal(symbol, prices, volumes)
-            print(f"✅ generate_signal() returned: {type(signal_result)}")
-            
-        except Exception as gen_error:
-            print(f"❌ EXCEPTION in generate_signal():")
-            print(f"   Type: {type(gen_error).__name__}")
-            print(f"   Message: {str(gen_error)}")
-            import traceback
-            print("   Full traceback:")
-            traceback.print_exc()
-            
+        signal_result = model_manager.generate_signal(symbol, prices, volumes)
+        
+        # model_manager.generate_signal() ALWAYS returns a dict, never None
+        if signal_result is None:
+            # This should NEVER happen with the new bulletproof model_manager
+            print(f"❌ CRITICAL: generate_signal returned None (should be impossible)")
             return jsonify({
                 'success': False,
-                'error': f'Signal generation error: {str(gen_error)}',
+                'error': 'Signal generation returned None (critical error)',
                 'symbol': symbol,
                 'signal': 'HOLD',
                 'signal_type': 'ERROR',
@@ -263,7 +257,7 @@ def analyze_signal():
                 'tp': 0,
                 'sl': 0,
                 'confidence': 0,
-                'reasoning': f'Error during signal generation: {str(gen_error)}',
+                'reasoning': 'Critical internal error: signal generator returned None',
                 'market_context': 'N/A',
                 'market_structure': 'N/A',
                 'timeframe': timeframe,
@@ -276,11 +270,12 @@ def analyze_signal():
                 }
             }), 500
         
-        if signal_result is None:
-            print(f"❌ Signal generation returned None for {symbol}")
+        # Check if signal indicates an error
+        if signal_result.get('error', False):
+            print(f"⚠️ Signal generation error: {signal_result.get('error_message', 'Unknown')}")
             return jsonify({
                 'success': False,
-                'error': 'Signal generation returned None (model may not be trained)',
+                'error': signal_result.get('error_message', 'Signal generation failed'),
                 'symbol': symbol,
                 'signal': 'HOLD',
                 'signal_type': 'ERROR',
@@ -288,18 +283,18 @@ def analyze_signal():
                 'tp': 0,
                 'sl': 0,
                 'confidence': 0,
-                'reasoning': 'Model training failed or signal generation returned no result',
-                'market_context': 'N/A',
+                'reasoning': signal_result.get('reasoning', 'Error during signal generation'),
+                'market_context': 'Error',
                 'market_structure': 'N/A',
                 'timeframe': timeframe,
-                'risk_metrics': {
+                'risk_metrics': signal_result.get('risk_metrics', {
                     'risk_reward_ratio': 0,
                     'potential_profit_pct': 0,
                     'potential_loss_pct': 0,
                     'prob_tp': 0,
                     'expected_value': 0
-                }
-            }), 500
+                })
+            }), 400
         
         # Map signal_type to signal for frontend compatibility
         signal_type = signal_result.get('signal_type', 'WAIT')
