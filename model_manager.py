@@ -101,9 +101,9 @@ class ModelManager:
                 return True, "Model already trained"
             
             try:
-                # Validate data - REQUIRE 200 CANDLES FOR STABLE HMM
-                if len(prices) < 200:
-                    error_msg = f"Insufficient data: Need 200 candles for stable HMM, got {len(prices)}"
+                # Validate data - REQUIRE 250 CANDLES FOR STABLE HMM
+                if len(prices) < 250:
+                    error_msg = f"Insufficient data: Need 250 candles for stable HMM, got {len(prices)}"
                     print(f"   ❌ {error_msg}")
                     model_state.last_error = error_msg
                     return False, error_msg
@@ -211,8 +211,8 @@ class ModelManager:
         model_state = self.get_or_create_model(symbol)
         
         # Validate input data
-        if len(prices) < 100:
-            error_msg = f"Insufficient data: Need 100 candles, got {len(prices)}"
+        if len(prices) < 200:
+            error_msg = f"Insufficient data: Need 200 candles, got {len(prices)}"
             print(f"   ❌ {error_msg}")
             print(f"{'='*70}\n")
             return self._error_signal(error_msg)
