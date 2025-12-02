@@ -157,42 +157,94 @@ class SignalGenerator:
         
         return features
 
+    def _calculate_volatility_adjusted_threshold(self, prices: np.ndarray) -> float:
+        """
+        ✅ Calculate adaptive discount threshold based on volatility
+        High volatility = wider threshold (0.35-0.40)
+        Low volatility = tighter threshold (0.25-0.30)
+        """
+        if len(prices) < 20:
+            return 0.30  # Default
+        
+        # Calculate recent volatility (last 20 candles)
+        returns = np.diff(np.log(prices[-20:]))
+        volatility = np.std(returns)
+        
+        # Normalize to 0-1 range (typical crypto volatility: 0.01-0.05)
+        norm_vol = min(1.0, max(0.0, (volatility - 0.01) / 0.04))
+        
+        # Map to threshold: low vol = 0.25, high vol = 0.40
+        threshold = 0.25 + (norm_vol * 0.15)
+        
+        return float(threshold)
+    
     def _detect_discounted_entry(self, prices: np.ndarray, signal_type: str, 
                                  support: float, resistance: float) -> Dict:
         """
-        ✅ NEW: Detect if current price is at a discounted/premium level
-        Returns: {'is_discounted': bool, 'discount_pct': float, 'should_wait': bool}
+        ✅ ENHANCED: Volatility-based discount detection with distance tracking
+        Returns: {'is_discounted': bool, 'discount_pct': float, 'should_wait': bool, 
+                  'distance_from_discount': float, 'threshold_used': float}
         """
         current = prices[-1]
         price_range = resistance - support
         
         if price_range <= 0:
-            return {'is_discounted': False, 'discount_pct': 0.0, 'should_wait': False}
+            return {
+                'is_discounted': False, 
+                'discount_pct': 0.0, 
+                'should_wait': False,
+                'distance_from_discount': 0.0,
+                'threshold_used': 0.30
+            }
+        
+        # Get volatility-adjusted threshold
+        threshold = self._calculate_volatility_adjusted_threshold(prices)
         
         if signal_type == 'BUY':
             # For BUY: price should be near support (discounted)
             distance_from_support = (current - support) / price_range
-            is_discounted = distance_from_support < 0.3  # Within 30% of support
-            should_wait = distance_from_support > 0.5  # Too far from support
+            is_discounted = distance_from_support < threshold
+            should_wait = distance_from_support > 0.5
+            
+            # Calculate how far from discount zone
+            if is_discounted:
+                distance_from_discount = 0.0  # Already in discount zone
+            else:
+                # Distance in price terms
+                discount_price = support + (price_range * threshold)
+                distance_from_discount = float(current - discount_price)
             
             return {
                 'is_discounted': is_discounted,
                 'discount_pct': float((1 - distance_from_support) * 100),
                 'should_wait': should_wait,
-                'reason': f"Price at {distance_from_support:.1%} of range from support"
+                'distance_from_discount': distance_from_discount,
+                'distance_pct': float(distance_from_support * 100),
+                'threshold_used': threshold,
+                'reason': f"Price at {distance_from_support:.1%} of range (threshold: {threshold:.1%})"
             }
         
         else:  # SELL
             # For SELL: price should be near resistance (premium)
             distance_from_resistance = (resistance - current) / price_range
-            is_premium = distance_from_resistance < 0.3
+            is_premium = distance_from_resistance < threshold
             should_wait = distance_from_resistance > 0.5
+            
+            # Calculate how far from premium zone
+            if is_premium:
+                distance_from_discount = 0.0
+            else:
+                premium_price = resistance - (price_range * threshold)
+                distance_from_discount = float(premium_price - current)
             
             return {
                 'is_discounted': is_premium,
                 'discount_pct': float((1 - distance_from_resistance) * 100),
                 'should_wait': should_wait,
-                'reason': f"Price at {distance_from_resistance:.1%} of range from resistance"
+                'distance_from_discount': distance_from_discount,
+                'distance_pct': float(distance_from_resistance * 100),
+                'threshold_used': threshold,
+                'reason': f"Price at {distance_from_resistance:.1%} from resistance (threshold: {threshold:.1%})"
             }
 
     def _find_liquidity_zones(self, prices: np.ndarray, lookback: int = 50) -> Dict:
@@ -358,8 +410,12 @@ class SignalGenerator:
             print(f"   📊 {discount_check['reason']}")
             
             if discount_check['should_wait'] and not breakout['is_breakout']:
-                return self._return_wait(
-                    f"Price not at discounted level. {discount_check['reason']}"
+                # Return WAIT with distance info
+                return self._return_wait_with_distance(
+                    f"Price not at discounted level. {discount_check['reason']}",
+                    discount_check['distance_from_discount'],
+                    discount_check['distance_pct'],
+                    signal_type
                 )
             
             if discount_check['is_discounted']:
@@ -500,6 +556,36 @@ class SignalGenerator:
             "confidence": 0.0,
             "reasoning": reason,
             "market_context": "N/A",
+            "risk_metrics": {
+                "risk_reward_ratio": 0.0,
+                "potential_profit_pct": 0.0,
+                "potential_loss_pct": 0.0,
+                "prob_tp_hit": 0.0,
+                "prob_sl_hit": 0.0,
+                "expected_value": 0.0,
+                "expected_value_pct": 0.0
+            }
+        }
+    
+    def _return_wait_with_distance(self, reason: str, distance: float, 
+                                   distance_pct: float, signal_type: str) -> Dict:
+        """
+        Return WAIT signal with distance to discount zone
+        """
+        return {
+            "signal_type": "WAIT",
+            "entry": 0.0,
+            "tp": 0.0,
+            "sl": 0.0,
+            "confidence": 0.0,
+            "reasoning": reason,
+            "market_context": "N/A",
+            "distance_info": {
+                "distance_from_discount": float(distance),
+                "distance_pct": float(distance_pct),
+                "direction": signal_type,
+                "message": f"Price needs to move ${abs(distance):.2f} ({distance_pct:.1f}% of range) to reach discount zone"
+            },
             "risk_metrics": {
                 "risk_reward_ratio": 0.0,
                 "potential_profit_pct": 0.0,
