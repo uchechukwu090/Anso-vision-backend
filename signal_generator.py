@@ -179,73 +179,138 @@ class SignalGenerator:
         return float(threshold)
     
     def _detect_discounted_entry(self, prices: np.ndarray, signal_type: str, 
-                                 support: float, resistance: float) -> Dict:
+                                 support: float, resistance: float, trend_strength: float = 0.5) -> Dict:
         """
-        ✅ ENHANCED: Volatility-based discount detection with distance tracking
-        Returns: {'is_discounted': bool, 'discount_pct': float, 'should_wait': bool, 
-                  'distance_from_discount': float, 'threshold_used': float}
+        ✅ ENHANCED: Intelligent entry with TWO modes:
+        - FRESH TREND: Wait for deep discount (25-30% zone)
+        - ESTABLISHED TREND: Enter on pullbacks (35-50% zone)
+        
+        Args:
+            trend_strength: 0.0-1.0 from market_analyzer
         """
         current = prices[-1]
         price_range = resistance - support
         
         if price_range <= 0:
             return {
-                'is_discounted': False, 
-                'discount_pct': 0.0, 
-                'should_wait': False,
-                'distance_from_discount': 0.0,
-                'threshold_used': 0.30
+                'is_discounted': False,
+                'entry_mode': 'INVALID_RANGE',
+                'should_wait': True,
+                'reason': 'Invalid support/resistance range'
             }
         
-        # Get volatility-adjusted threshold
-        threshold = self._calculate_volatility_adjusted_threshold(prices)
+        # Get volatility-adjusted base threshold
+        base_threshold = self._calculate_volatility_adjusted_threshold(prices)
+        
+        # Detect recent momentum (trend stage)
+        recent_10_change = (prices[-1] - prices[-10]) / prices[-10] if len(prices) >= 10 else 0
+        recent_20_change = (prices[-1] - prices[-20]) / prices[-20] if len(prices) >= 20 else 0
+        
+        # Classify trend stage
+        is_fresh_trend = trend_strength < 0.4 or abs(recent_20_change) < 0.015  # <1.5% move
+        is_established_trend = trend_strength > 0.6 and abs(recent_20_change) > 0.02  # >2% move
         
         if signal_type == 'BUY':
-            # For BUY: price should be near support (discounted)
             distance_from_support = (current - support) / price_range
-            is_discounted = distance_from_support < threshold
-            should_wait = distance_from_support > 0.5
             
-            # Calculate how far from discount zone
-            if is_discounted:
-                distance_from_discount = 0.0  # Already in discount zone
+            # MODE 1: Fresh trend - strict discount
+            if is_fresh_trend:
+                is_discounted = distance_from_support < base_threshold
+                return {
+                    'is_discounted': is_discounted,
+                    'entry_mode': 'FRESH_TREND',
+                    'discount_pct': float((1 - distance_from_support) * 100),
+                    'threshold_used': base_threshold,
+                    'distance_pct': float(distance_from_support * 100),
+                    'should_wait': not is_discounted,
+                    'reason': f"Fresh trend - {'✅ In discount zone' if is_discounted else f'⏳ Wait for pullback to {base_threshold:.1%}'} (currently {distance_from_support:.1%})"
+                }
+            
+            # MODE 2: Established trend - pullback entry
+            elif is_established_trend:
+                pullback_threshold = base_threshold + 0.15
+                recent_high = np.max(prices[-10:])
+                pullback_depth = (recent_high - current) / recent_high if recent_high > 0 else 0
+                
+                is_pullback_zone = 0.20 < distance_from_support < pullback_threshold
+                has_pullback = pullback_depth > 0.01  # 1% pullback minimum
+                
+                is_valid = is_pullback_zone and has_pullback
+                
+                return {
+                    'is_discounted': is_valid,
+                    'entry_mode': 'MOMENTUM_PULLBACK',
+                    'pullback_depth_pct': float(pullback_depth * 100),
+                    'distance_pct': float(distance_from_support * 100),
+                    'threshold_used': pullback_threshold,
+                    'should_wait': not is_valid,
+                    'reason': f"Trend moving - {'✅ Pullback entry' if is_valid else f'⏳ Need {pullback_depth*100:.1f}% pullback or position <{pullback_threshold:.1%}'} (at {distance_from_support:.1%})"
+                }
+            
+            # MODE 3: Moderate trend - standard discount
             else:
-                # Distance in price terms
-                discount_price = support + (price_range * threshold)
-                distance_from_discount = float(current - discount_price)
-            
-            return {
-                'is_discounted': is_discounted,
-                'discount_pct': float((1 - distance_from_support) * 100),
-                'should_wait': should_wait,
-                'distance_from_discount': distance_from_discount,
-                'distance_pct': float(distance_from_support * 100),
-                'threshold_used': threshold,
-                'reason': f"Price at {distance_from_support:.1%} of range (threshold: {threshold:.1%})"
-            }
+                moderate_threshold = base_threshold + 0.05
+                is_discounted = distance_from_support < moderate_threshold
+                
+                return {
+                    'is_discounted': is_discounted,
+                    'entry_mode': 'MODERATE_TREND',
+                    'distance_pct': float(distance_from_support * 100),
+                    'threshold_used': moderate_threshold,
+                    'should_wait': not is_discounted,
+                    'reason': f"Moderate trend - {'✅ Fair entry' if is_discounted else f'⏳ Wait for <{moderate_threshold:.1%}'} (at {distance_from_support:.1%})"
+                }
         
         else:  # SELL
-            # For SELL: price should be near resistance (premium)
             distance_from_resistance = (resistance - current) / price_range
-            is_premium = distance_from_resistance < threshold
-            should_wait = distance_from_resistance > 0.5
             
-            # Calculate how far from premium zone
-            if is_premium:
-                distance_from_discount = 0.0
+            # MODE 1: Fresh trend - strict premium
+            if is_fresh_trend:
+                is_premium = distance_from_resistance < base_threshold
+                return {
+                    'is_discounted': is_premium,
+                    'entry_mode': 'FRESH_TREND',
+                    'premium_pct': float((1 - distance_from_resistance) * 100),
+                    'threshold_used': base_threshold,
+                    'distance_pct': float(distance_from_resistance * 100),
+                    'should_wait': not is_premium,
+                    'reason': f"Fresh downtrend - {'✅ In premium zone' if is_premium else f'⏳ Wait for rally to {base_threshold:.1%}'} (currently {distance_from_resistance:.1%})"
+                }
+            
+            # MODE 2: Established trend - rally entry
+            elif is_established_trend:
+                pullback_threshold = base_threshold + 0.15
+                recent_low = np.min(prices[-10:])
+                rally_depth = (current - recent_low) / recent_low if recent_low > 0 else 0
+                
+                is_pullback_zone = 0.20 < distance_from_resistance < pullback_threshold
+                has_rally = rally_depth > 0.01
+                
+                is_valid = is_pullback_zone and has_rally
+                
+                return {
+                    'is_discounted': is_valid,
+                    'entry_mode': 'MOMENTUM_PULLBACK',
+                    'rally_depth_pct': float(rally_depth * 100),
+                    'distance_pct': float(distance_from_resistance * 100),
+                    'threshold_used': pullback_threshold,
+                    'should_wait': not is_valid,
+                    'reason': f"Downtrend moving - {'✅ Rally entry' if is_valid else f'⏳ Need {rally_depth*100:.1f}% rally or position <{pullback_threshold:.1%}'} (at {distance_from_resistance:.1%})"
+                }
+            
+            # MODE 3: Moderate trend
             else:
-                premium_price = resistance - (price_range * threshold)
-                distance_from_discount = float(premium_price - current)
-            
-            return {
-                'is_discounted': is_premium,
-                'discount_pct': float((1 - distance_from_resistance) * 100),
-                'should_wait': should_wait,
-                'distance_from_discount': distance_from_discount,
-                'distance_pct': float(distance_from_resistance * 100),
-                'threshold_used': threshold,
-                'reason': f"Price at {distance_from_resistance:.1%} from resistance (threshold: {threshold:.1%})"
-            }
+                moderate_threshold = base_threshold + 0.05
+                is_premium = distance_from_resistance < moderate_threshold
+                
+                return {
+                    'is_discounted': is_premium,
+                    'entry_mode': 'MODERATE_TREND',
+                    'distance_pct': float(distance_from_resistance * 100),
+                    'threshold_used': moderate_threshold,
+                    'should_wait': not is_premium,
+                    'reason': f"Moderate downtrend - {'✅ Fair entry' if is_premium else f'⏳ Wait for <{moderate_threshold:.1%}'} (at {distance_from_resistance:.1%})"
+                }
 
     def _find_liquidity_zones(self, prices: np.ndarray, lookback: int = 50) -> Dict:
         """
@@ -403,10 +468,11 @@ class SignalGenerator:
             if signal_type == 'WAIT' and not breakout['is_breakout']:
                 return self._return_wait(reasoning)
             
-            # 4. ✅ NEW: Discounted entry check
+            # 4. ✅ NEW: Discounted entry check (with trend strength)
             print("\n4️⃣ ENTRY PRICE ANALYSIS")
+            trend_strength = market_analysis.get('trend_strength', 0.5)
             discount_check = self._detect_discounted_entry(denoised_prices, signal_type, 
-                                                           support, resistance)
+                                                           support, resistance, trend_strength)
             print(f"   📊 {discount_check['reason']}")
             
             if discount_check['should_wait'] and not breakout['is_breakout']:
