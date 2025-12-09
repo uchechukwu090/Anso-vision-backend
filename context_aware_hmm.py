@@ -72,11 +72,11 @@ class ContextAwareHMM:
         # Calculate percentage change
         pct_change = (recent[-1] - recent[0]) / recent[0] * 100 if recent[0] != 0 else 0
         
-        # Lower threshold: 0.3% instead of 1%
-        # Strong correlation (>0.7) OR significant % change
-        if (slope > 0 and abs(correlation) > 0.5 and pct_change > 0.3) or pct_change > 1.0:
+        # FIXED: More responsive - lower thresholds for faster trend detection
+        # Accept trend if: weak correlation (>0.3) + 0.2% move OR strong move (>0.5%)
+        if (slope > 0 and abs(correlation) > 0.3 and pct_change > 0.2) or pct_change > 0.5:
             return Trend.UPTREND
-        elif (slope < 0 and abs(correlation) > 0.5 and pct_change < -0.3) or pct_change < -1.0:
+        elif (slope < 0 and abs(correlation) > 0.3 and pct_change < -0.2) or pct_change < -0.5:
             return Trend.DOWNTREND
         else:
             return Trend.SIDEWAYS

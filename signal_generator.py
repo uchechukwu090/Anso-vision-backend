@@ -20,7 +20,7 @@ from datetime import datetime
 
 # --- Constants ---
 HMM_COMPONENTS = 3
-WAVELET_LEVEL = 4
+WAVELET_LEVEL = 2  # FIXED: Reduced from 4 to 2 for faster response (less lag)
 ATR_PERIOD = 14
 MC_SIMS = 25_000
 MC_CONF = 0.90
