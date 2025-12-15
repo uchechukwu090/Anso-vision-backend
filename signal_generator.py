@@ -426,12 +426,15 @@ class SignalGenerator:
             risk = sl - current_price
         
         rr = float(reward / risk) if risk > 0 else 0.0
+        expected_value = float((reward * 0.5) - (risk * 0.5))
+        expected_value_pct = float((expected_value / current_price) * 100) if current_price > 0 else 0.0
         
         return {
             'risk_reward_ratio': rr,
             'potential_profit_pct': float((reward / current_price) * 100) if current_price > 0 else 0.0,
             'potential_loss_pct': float((risk / current_price) * 100) if current_price > 0 else 0.0,
-            'expected_value': float((reward * 0.5) - (risk * 0.5))
+            'expected_value': expected_value,
+            'expected_value_pct': expected_value_pct
         }
 
     def _return_wait(self, reason: str) -> Dict:
