@@ -1,13 +1,14 @@
 """
-MASTER SIGNAL ORCHESTRATOR - Enhanced with Learning & Breakout Detection
-✅ NEW: Discounted entry detection, liquidity-based SL, S/R-based TP
-✅ NEW: Volatility breakout signals
-✅ NEW: Monte Carlo learning curve for parameter optimization
+MASTER SIGNAL ORCHESTRATOR - CLEAN & FAST
+✅ Wavelet removed (Kalman does smoothing better)
+✅ Kalman integrated with frequency awareness
+✅ Whipsaw detector (prevents entries before reversals)
+✅ Simple BUY/SELL output for MT5
+✅ HMM as independent accurate core
 """
 import numpy as np
 from kalman_filter import apply_kalman_filter
 from hmm_model import MarketHMM
-from wavelet_analysis import denoise_signal_with_wavelets
 from atr_calculator import ATRCalculator
 from monte_carlo_optimizer import MonteCarloOptimizer
 from pure_monte_carlo_engine import MonteCarloTradingEngine
@@ -20,11 +21,10 @@ from datetime import datetime
 
 # --- Constants ---
 HMM_COMPONENTS = 3
-WAVELET_LEVEL = 2  # FIXED: Reduced from 4 to 2 for faster response (less lag)
 ATR_PERIOD = 14
 MC_SIMS = 25_000
 MC_CONF = 0.90
-MIN_CANDLES_FOR_TRAINING = 250  # ✅ Increased for stable learning
+MIN_CANDLES_FOR_TRAINING = 250
 MIN_CANDLES_FOR_SIGNAL = 200
 
 # Learning configuration
@@ -33,12 +33,160 @@ INITIAL_LEARNING_RATE = 0.1
 MIN_LEARNING_RATE = 0.01
 
 
-class SignalGenerator:
-    def __init__(self, n_hmm_components=HMM_COMPONENTS, covariance_type='diag', 
-                 wavelet_level=WAVELET_LEVEL, random_state=42):
-        self.wavelet_level = wavelet_level
+class WhipsawDetector:
+    """
+    ✅ NEW: Detects whipsaw movements before they fully form
+    Prevents entries right before reversals
+    """
+    
+    def __init__(self, lookback: int = 20):
+        self.lookback = lookback
+    
+    def detect_whipsaw_risk(self, prices: np.ndarray, volumes: np.ndarray) -> Dict:
+        """
+        Detect whipsaw risk using:
+        1. False breakouts (wicks beyond support/resistance)
+        2. Volume without follow-through
+        3. Price acceleration followed by deceleration
+        4. Momentum divergence
+        """
         
-        # Core models
+        if len(prices) < self.lookback:
+            return {
+                'whipsaw_risk': 'LOW',
+                'risk_level': 0.0,
+                'expected_direction': None,
+                'reasoning': 'Insufficient data'
+            }
+        
+        recent = prices[-self.lookback:]
+        recent_vols = volumes[-self.lookback:]
+        
+        # 1. FALSE BREAKOUT DETECTION
+        # Check if price made extreme wicks without follow-through
+        high = np.max(recent)
+        low = np.min(recent)
+        current = recent[-1]
+        
+        price_range = high - low
+        distance_to_high = high - current
+        distance_to_low = current - low
+        
+        # If price is near extreme but volume is declining = false breakout
+        vol_trend = np.polyfit(np.arange(len(recent_vols)), recent_vols, 1)[0]
+        vol_declining = vol_trend < 0
+        
+        is_false_breakout = (distance_to_high < price_range * 0.15 or distance_to_low < price_range * 0.15) and vol_declining
+        
+        # 2. ACCELERATION DETECTION
+        # Measure if price is accelerating (might reverse soon)
+        recent_moves = np.diff(recent)
+        acceleration = np.polyfit(np.arange(len(recent_moves)), recent_moves, 1)[0]
+        is_accelerating = abs(acceleration) > np.std(recent_moves) * 0.5
+        
+        # 3. MOMENTUM DIVERGENCE
+        # Check if momentum is weakening despite price moving
+        momentum = recent_moves[-5:].sum()
+        volatility = np.std(recent_moves[-5:])
+        momentum_weakness = volatility > abs(momentum) * 0.3
+        
+        # 4. CALCULATE WHIPSAW RISK
+        risk_factors = sum([is_false_breakout, is_accelerating, momentum_weakness])
+        
+        if risk_factors >= 2:
+            whipsaw_risk = 'HIGH'
+            risk_level = 0.8
+        elif risk_factors == 1:
+            whipsaw_risk = 'MEDIUM'
+            risk_level = 0.5
+        else:
+            whipsaw_risk = 'LOW'
+            risk_level = 0.2
+        
+        # 5. EXPECTED DIRECTION OF WHIPSAW
+        if distance_to_high < distance_to_low:
+            expected_whipsaw = 'DOWN'  # Near high, risk of pullback
+        else:
+            expected_whipsaw = 'UP'    # Near low, risk of bounce
+        
+        reasoning = f"False breakout: {is_false_breakout}, Accelerating: {is_accelerating}, Momentum weak: {momentum_weakness}"
+        
+        return {
+            'whipsaw_risk': whipsaw_risk,
+            'risk_level': float(risk_level),
+            'expected_direction': expected_whipsaw,
+            'reasoning': reasoning,
+            'factors': {
+                'false_breakout': is_false_breakout,
+                'accelerating': is_accelerating,
+                'momentum_weakness': momentum_weakness
+            }
+        }
+
+
+class KalmanFrequencyAnalyzer:
+    """
+    ✅ ENHANCED: Kalman + Frequency awareness
+    Tracks volatility cycles not just smoothing
+    """
+    
+    def __init__(self, window: int = 30):
+        self.window = window
+    
+    def analyze_frequency(self, prices: np.ndarray) -> Dict:
+        """
+        Analyze Kalman-filtered data for frequency information
+        Returns: volatility trends, cycle patterns
+        """
+        
+        if len(prices) < self.window:
+            return {'volatility_trend': 'STABLE', 'frequency': 'UNKNOWN'}
+        
+        # Apply Kalman filter
+        kalman_filtered = apply_kalman_filter(prices)
+        
+        # Calculate volatility on filtered data
+        recent_filtered = kalman_filtered[-self.window:]
+        volatility = np.std(np.diff(recent_filtered))
+        volatility_baseline = np.std(np.diff(kalman_filtered[-60:]))
+        
+        vol_ratio = volatility / volatility_baseline if volatility_baseline > 0 else 1.0
+        
+        # Detect volatility trend (increasing/decreasing/stable)
+        vol_windows = [
+            np.std(np.diff(kalman_filtered[i:i+10])) 
+            for i in range(len(kalman_filtered)-30, len(kalman_filtered)-10, 5)
+        ]
+        vol_trend = np.polyfit(np.arange(len(vol_windows)), vol_windows, 1)[0]
+        
+        if vol_trend > 0:
+            vol_state = 'INCREASING'
+        elif vol_trend < 0:
+            vol_state = 'DECREASING'
+        else:
+            vol_state = 'STABLE'
+        
+        # Detect frequency cycle
+        if vol_ratio > 1.5:
+            frequency = 'HIGH'  # High volatility period
+        elif vol_ratio < 0.7:
+            frequency = 'LOW'   # Low volatility period
+        else:
+            frequency = 'NORMAL'
+        
+        return {
+            'volatility': float(volatility),
+            'volatility_ratio': float(vol_ratio),
+            'volatility_trend': vol_state,
+            'frequency': frequency,
+            'kalman_filtered': kalman_filtered
+        }
+
+
+class SignalGenerator:
+    def __init__(self, n_hmm_components=HMM_COMPONENTS, covariance_type='diag', random_state=42):
+        
+        # ✅ CLEAN CORE: Only essential models
         self.hmm_model = MarketHMM(n_components=n_hmm_components, 
                                    covariance_type=covariance_type, 
                                    random_state=random_state)
@@ -48,14 +196,21 @@ class SignalGenerator:
         self.context_analyzer = ContextAwareHMM()
         self.atr_calc = ATRCalculator(atr_period=ATR_PERIOD, tp_multiplier=2.0, sl_multiplier=1.0)
         
-        # ✅ NEW: Learning system for Monte Carlo
+        # ✅ NEW: Whipsaw detector
+        self.whipsaw_detector = WhipsawDetector(lookback=20)
+        
+        # ✅ ENHANCED: Kalman frequency analyzer
+        self.kalman_analyzer = KalmanFrequencyAnalyzer(window=30)
+        
+        # Learning system
         self.learning_state = self._load_learning_state()
         self.trade_history = []
         
-        print(f"✅ SignalGenerator initialized")
+        print(f"✅ SignalGenerator initialized (CLEAN VERSION)")
         print(f"   • HMM components: {n_hmm_components}")
-        print(f"   • Monte Carlo: {MC_SIMS} sims, {MC_CONF:.0%} confidence")
-        print(f"   • Learning: Enabled (trades tracked: {len(self.learning_state['trades'])})")
+        print(f"   • Whipsaw detection: ENABLED")
+        print(f"   • Kalman frequency: ENABLED")
+        print(f"   • Wavelet: REMOVED (Kalman does smoothing)")
 
     def _load_learning_state(self) -> Dict:
         """Load or initialize learning state"""
@@ -84,57 +239,17 @@ class SignalGenerator:
                 pickle.dump(self.learning_state, f)
         except Exception as e:
             print(f"⚠️ Failed to save learning state: {e}")
-    
-    def _update_learning(self, signal_type: str, entry: float, tp: float, sl: float, 
-                        outcome: str = None, exit_price: float = None):
-        """
-        Update learning parameters based on trade outcomes
-        outcome: 'win', 'loss', or None (pending)
-        """
-        trade = {
-            'timestamp': datetime.now().isoformat(),
-            'signal': signal_type,
-            'entry': entry,
-            'tp': tp,
-            'sl': sl,
-            'outcome': outcome,
-            'exit_price': exit_price
-        }
-        
-        self.learning_state['trades'].append(trade)
-        
-        # If trade completed, update statistics
-        if outcome:
-            completed_trades = [t for t in self.learning_state['trades'] if t['outcome']]
-            wins = len([t for t in completed_trades if t['outcome'] == 'win'])
-            
-            self.learning_state['win_rate'] = wins / len(completed_trades) if completed_trades else 0.0
-            
-            # Adjust Monte Carlo confidence based on win rate
-            if self.learning_state['win_rate'] < 0.4:
-                self.learning_state['mc_confidence'] = min(0.95, self.learning_state['mc_confidence'] + 0.01)
-            elif self.learning_state['win_rate'] > 0.6:
-                self.learning_state['mc_confidence'] = max(0.85, self.learning_state['mc_confidence'] - 0.01)
-            
-            # Update learning rate (decay)
-            trades_count = len(completed_trades)
-            self.learning_state['learning_rate'] = max(
-                MIN_LEARNING_RATE,
-                INITIAL_LEARNING_RATE * (0.99 ** trades_count)
-            )
-            
-            self.learning_state['last_updated'] = datetime.now().isoformat()
-            self._save_learning_state()
-            
-            print(f"   📊 Learning updated: WR={self.learning_state['win_rate']:.1%}, "
-                  f"MC_Conf={self.learning_state['mc_confidence']:.2f}")
 
-    def _prepare_hmm_features(self, smoothed_data):
-        """Enhanced feature preparation with more indicators"""
-        if len(smoothed_data) < 20:
-            raise ValueError(f"Need at least 20 candles, got {len(smoothed_data)}")
+    def _prepare_hmm_features(self, prices):
+        """Prepare features for HMM using Kalman-filtered data"""
         
-        log_returns = np.diff(np.log(smoothed_data + 1e-10))
+        if len(prices) < 20:
+            raise ValueError(f"Need at least 20 candles, got {len(prices)}")
+        
+        # ✅ Use Kalman-filtered prices for HMM input (cleaner signal)
+        kalman_prices = apply_kalman_filter(prices)
+        
+        log_returns = np.diff(np.log(kalman_prices + 1e-10))
         
         window = 10
         volatility = np.zeros_like(log_returns)
@@ -157,256 +272,14 @@ class SignalGenerator:
         
         return features
 
-    def _calculate_volatility_adjusted_threshold(self, prices: np.ndarray) -> float:
-        """
-        ✅ Calculate adaptive discount threshold based on volatility
-        High volatility = wider threshold (0.35-0.40)
-        Low volatility = tighter threshold (0.25-0.30)
-        """
-        if len(prices) < 20:
-            return 0.30  # Default
-        
-        # Calculate recent volatility (last 20 candles)
-        returns = np.diff(np.log(prices[-20:]))
-        volatility = np.std(returns)
-        
-        # Normalize to 0-1 range (typical crypto volatility: 0.01-0.05)
-        norm_vol = min(1.0, max(0.0, (volatility - 0.01) / 0.04))
-        
-        # Map to threshold: low vol = 0.25, high vol = 0.40
-        threshold = 0.25 + (norm_vol * 0.15)
-        
-        return float(threshold)
-    
-    def _detect_discounted_entry(self, prices: np.ndarray, signal_type: str, 
-                                 support: float, resistance: float, trend_strength: float = 0.5) -> Dict:
-        """
-        ✅ ENHANCED: Intelligent entry with TWO modes:
-        - FRESH TREND: Wait for deep discount (25-30% zone)
-        - ESTABLISHED TREND: Enter on pullbacks (35-50% zone)
-        
-        Args:
-            trend_strength: 0.0-1.0 from market_analyzer
-        """
-        current = prices[-1]
-        price_range = resistance - support
-        
-        if price_range <= 0:
-            return {
-                'is_discounted': False,
-                'entry_mode': 'INVALID_RANGE',
-                'should_wait': True,
-                'reason': 'Invalid support/resistance range'
-            }
-        
-        # Get volatility-adjusted base threshold
-        base_threshold = self._calculate_volatility_adjusted_threshold(prices)
-        
-        # Detect recent momentum (trend stage)
-        recent_10_change = (prices[-1] - prices[-10]) / prices[-10] if len(prices) >= 10 else 0
-        recent_20_change = (prices[-1] - prices[-20]) / prices[-20] if len(prices) >= 20 else 0
-        
-        # Classify trend stage
-        is_fresh_trend = trend_strength < 0.4 or abs(recent_20_change) < 0.015  # <1.5% move
-        is_established_trend = trend_strength > 0.6 and abs(recent_20_change) > 0.02  # >2% move
-        
-        if signal_type == 'BUY':
-            distance_from_support = (current - support) / price_range
-            
-            # MODE 1: Fresh trend - strict discount
-            if is_fresh_trend:
-                is_discounted = distance_from_support < base_threshold
-                return {
-                    'is_discounted': is_discounted,
-                    'entry_mode': 'FRESH_TREND',
-                    'discount_pct': float((1 - distance_from_support) * 100),
-                    'threshold_used': base_threshold,
-                    'distance_pct': float(distance_from_support * 100),
-                    'should_wait': not is_discounted,
-                    'reason': f"Fresh trend - {'✅ In discount zone' if is_discounted else f'⏳ Wait for pullback to {base_threshold:.1%}'} (currently {distance_from_support:.1%})"
-                }
-            
-            # MODE 2: Established trend - pullback entry
-            elif is_established_trend:
-                pullback_threshold = base_threshold + 0.15
-                recent_high = np.max(prices[-10:])
-                pullback_depth = (recent_high - current) / recent_high if recent_high > 0 else 0
-                
-                is_pullback_zone = 0.20 < distance_from_support < pullback_threshold
-                has_pullback = pullback_depth > 0.01  # 1% pullback minimum
-                
-                is_valid = is_pullback_zone and has_pullback
-                
-                return {
-                    'is_discounted': is_valid,
-                    'entry_mode': 'MOMENTUM_PULLBACK',
-                    'pullback_depth_pct': float(pullback_depth * 100),
-                    'distance_pct': float(distance_from_support * 100),
-                    'threshold_used': pullback_threshold,
-                    'should_wait': not is_valid,
-                    'reason': f"Trend moving - {'✅ Pullback entry' if is_valid else f'⏳ Need {pullback_depth*100:.1f}% pullback or position <{pullback_threshold:.1%}'} (at {distance_from_support:.1%})"
-                }
-            
-            # MODE 3: Moderate trend - standard discount
-            else:
-                moderate_threshold = base_threshold + 0.05
-                is_discounted = distance_from_support < moderate_threshold
-                
-                return {
-                    'is_discounted': is_discounted,
-                    'entry_mode': 'MODERATE_TREND',
-                    'distance_pct': float(distance_from_support * 100),
-                    'threshold_used': moderate_threshold,
-                    'should_wait': not is_discounted,
-                    'reason': f"Moderate trend - {'✅ Fair entry' if is_discounted else f'⏳ Wait for <{moderate_threshold:.1%}'} (at {distance_from_support:.1%})"
-                }
-        
-        else:  # SELL
-            distance_from_resistance = (resistance - current) / price_range
-            
-            # MODE 1: Fresh trend - strict premium
-            if is_fresh_trend:
-                is_premium = distance_from_resistance < base_threshold
-                return {
-                    'is_discounted': is_premium,
-                    'entry_mode': 'FRESH_TREND',
-                    'premium_pct': float((1 - distance_from_resistance) * 100),
-                    'threshold_used': base_threshold,
-                    'distance_pct': float(distance_from_resistance * 100),
-                    'should_wait': not is_premium,
-                    'reason': f"Fresh downtrend - {'✅ In premium zone' if is_premium else f'⏳ Wait for rally to {base_threshold:.1%}'} (currently {distance_from_resistance:.1%})"
-                }
-            
-            # MODE 2: Established trend - rally entry
-            elif is_established_trend:
-                pullback_threshold = base_threshold + 0.15
-                recent_low = np.min(prices[-10:])
-                rally_depth = (current - recent_low) / recent_low if recent_low > 0 else 0
-                
-                is_pullback_zone = 0.20 < distance_from_resistance < pullback_threshold
-                has_rally = rally_depth > 0.01
-                
-                is_valid = is_pullback_zone and has_rally
-                
-                return {
-                    'is_discounted': is_valid,
-                    'entry_mode': 'MOMENTUM_PULLBACK',
-                    'rally_depth_pct': float(rally_depth * 100),
-                    'distance_pct': float(distance_from_resistance * 100),
-                    'threshold_used': pullback_threshold,
-                    'should_wait': not is_valid,
-                    'reason': f"Downtrend moving - {'✅ Rally entry' if is_valid else f'⏳ Need {rally_depth*100:.1f}% rally or position <{pullback_threshold:.1%}'} (at {distance_from_resistance:.1%})"
-                }
-            
-            # MODE 3: Moderate trend
-            else:
-                moderate_threshold = base_threshold + 0.05
-                is_premium = distance_from_resistance < moderate_threshold
-                
-                return {
-                    'is_discounted': is_premium,
-                    'entry_mode': 'MODERATE_TREND',
-                    'distance_pct': float(distance_from_resistance * 100),
-                    'threshold_used': moderate_threshold,
-                    'should_wait': not is_premium,
-                    'reason': f"Moderate downtrend - {'✅ Fair entry' if is_premium else f'⏳ Wait for <{moderate_threshold:.1%}'} (at {distance_from_resistance:.1%})"
-                }
-
-    def _find_liquidity_zones(self, prices: np.ndarray, lookback: int = 50) -> Dict:
-        """
-        ✅ NEW: Find liquidity zones (swing highs/lows) for better SL placement
-        """
-        recent = prices[-lookback:] if len(prices) > lookback else prices
-        
-        swing_highs = []
-        swing_lows = []
-        
-        # Find swing points (3-bar patterns)
-        for i in range(2, len(recent) - 2):
-            # Swing high
-            if recent[i] > recent[i-1] and recent[i] > recent[i-2] and \
-               recent[i] > recent[i+1] and recent[i] > recent[i+2]:
-                swing_highs.append(recent[i])
-            
-            # Swing low
-            if recent[i] < recent[i-1] and recent[i] < recent[i-2] and \
-               recent[i] < recent[i+1] and recent[i] < recent[i+2]:
-                swing_lows.append(recent[i])
-        
-        current = prices[-1]
-        
-        # Find nearest swing low (for BUY SL) and swing high (for SELL SL)
-        nearest_swing_low = min(swing_lows, key=lambda x: abs(current - x)) if swing_lows else current * 0.99
-        nearest_swing_high = min(swing_highs, key=lambda x: abs(current - x)) if swing_highs else current * 1.01
-        
-        return {
-            'swing_lows': swing_lows,
-            'swing_highs': swing_highs,
-            'nearest_swing_low': float(nearest_swing_low),
-            'nearest_swing_high': float(nearest_swing_high),
-            'liquidity_clusters': len(swing_highs) + len(swing_lows)
-        }
-
-    def _detect_volatility_breakout(self, prices: np.ndarray, volumes: np.ndarray) -> Dict:
-        """
-        ✅ NEW: Detect volatility breakouts for range expansion trades
-        """
-        if len(prices) < 30:
-            return {'is_breakout': False, 'strength': 0.0}
-        
-        # Calculate volatility (ATR-like)
-        recent_range = np.mean([prices[i] - prices[i-1] for i in range(-20, -1)])
-        current_range = prices[-1] - prices[-2]
-        
-        # Volume confirmation
-        avg_volume = np.mean(volumes[-20:-1])
-        current_volume = volumes[-1]
-        volume_surge = current_volume > avg_volume * 1.5
-        
-        # Volatility surge
-        volatility_ratio = current_range / recent_range if recent_range > 0 else 1.0
-        is_breakout = volatility_ratio > 1.5 and volume_surge
-        
-        # Determine direction
-        direction = 'BUY' if prices[-1] > prices[-2] else 'SELL'
-        
-        return {
-            'is_breakout': is_breakout,
-            'strength': float(volatility_ratio),
-            'direction': direction,
-            'volume_surge': volume_surge,
-            'reasoning': f"Volatility {volatility_ratio:.1f}x, Volume {current_volume/avg_volume:.1f}x"
-        }
-
-    def _calculate_tp_with_sr(self, current_price: float, signal_type: str, 
-                              mc_tp: float, support: float, resistance: float) -> float:
-        """
-        ✅ NEW: Adjust TP to align with S/R levels
-        """
-        if signal_type == 'BUY':
-            # For BUY, TP should be near resistance but not beyond
-            if mc_tp > resistance:
-                adjusted_tp = resistance * 0.995  # 0.5% before resistance
-            else:
-                adjusted_tp = mc_tp
-        else:  # SELL
-            # For SELL, TP should be near support but not beyond
-            if mc_tp < support:
-                adjusted_tp = support * 1.005  # 0.5% after support
-            else:
-                adjusted_tp = mc_tp
-        
-        return float(adjusted_tp)
-
     def generate_signals(self, prices: np.ndarray, volumes: np.ndarray = None) -> Dict:
         """
-        Enhanced signal generation with all new features
+        ✅ CLEAN SIGNAL GENERATION
+        Returns: BUY, SELL, or WAIT only
         """
         try:
             if len(prices) < MIN_CANDLES_FOR_SIGNAL:
-                return self._return_wait(
-                    f"Need {MIN_CANDLES_FOR_SIGNAL} candles, got {len(prices)}"
-                )
+                return self._return_wait(f"Need {MIN_CANDLES_FOR_SIGNAL} candles, got {len(prices)}")
 
             if volumes is None:
                 volumes = np.ones_like(prices)
@@ -414,165 +287,124 @@ class SignalGenerator:
             current_price = prices[-1]
 
             print("\n" + "="*70)
-            print("🧠 ENHANCED SIGNAL GENERATION")
+            print("🧠 SIGNAL GENERATION (CLEAN VERSION)")
             print("="*70)
             
-            # 1. Data preprocessing
-            print("\n1️⃣ DATA PRE-PROCESSING")
-            kalman_smoothed = apply_kalman_filter(prices)
-            denoised_prices = denoise_signal_with_wavelets(kalman_smoothed, level=self.wavelet_level)
-            print(f"   ✅ Smoothing applied")
+            # 1. KALMAN FREQUENCY ANALYSIS
+            print("\n1️⃣ KALMAN FREQUENCY ANALYSIS")
+            kalman_info = self.kalman_analyzer.analyze_frequency(prices)
+            kalman_prices = kalman_info['kalman_filtered']
+            print(f"   ✅ Volatility: {kalman_info['volatility']:.6f} ({kalman_info['frequency']})")
+            print(f"   ✅ Trend: {kalman_info['volatility_trend']}")
             
-            # 2. Market analysis
-            print("\n2️⃣ MARKET ANALYSIS")
+            # 2. HMM TRAINING & STATE DETECTION
+            print("\n2️⃣ HMM STATE DETECTION")
             
             if not self.hmm_model.is_trained:
-                hmm_features = self._prepare_hmm_features(denoised_prices)
+                hmm_features = self._prepare_hmm_features(kalman_prices)
                 self.hmm_model.train(hmm_features)
                 print(f"   ✅ HMM trained")
             
-            hmm_features_latest = self._prepare_hmm_features(denoised_prices[-100:])
+            hmm_features_latest = self._prepare_hmm_features(kalman_prices[-100:])
             latest_state_index = self.hmm_model.predict_states(hmm_features_latest)[-1]
             self.hmm_model.state_history = self.hmm_model.predict_states(hmm_features_latest)
             state_confidence = self.hmm_model.get_state_stability(self.hmm_model.state_history)
-            print(f"   ✅ HMM State: {latest_state_index} (conf: {state_confidence:.1%})")
+            print(f"   ✅ State: {latest_state_index} | Confidence: {state_confidence:.1%}")
             
-            market_analysis = self.market_analyzer.analyze_market_structure(denoised_prices, volumes)
-            key_levels = market_analysis['price_levels']
-            support = key_levels.get('nearest_support', 0)
-            resistance = key_levels.get('nearest_resistance', 0)
-            print(f"   ✅ S/R: {support:.2f} / {resistance:.2f}")
-            
+            # 3. CONTEXT ANALYSIS (Trend confirmation on HMM)
+            print("\n3️⃣ CONTEXT ANALYSIS")
             hmm_context = self.context_analyzer.analyze_with_context(
-                prices=denoised_prices,
+                prices=kalman_prices,
                 volumes=volumes,
                 hmm_state=latest_state_index
             )
+            print(f"   ✅ HMM Signal: {hmm_context['signal']} ({hmm_context['confidence']:.1%})")
             print(f"   ✅ Context: {hmm_context['context']}")
             
-            # 3. ✅ NEW: Volatility breakout detection
-            print("\n3️⃣ VOLATILITY BREAKOUT CHECK")
-            breakout = self._detect_volatility_breakout(denoised_prices, volumes)
-            if breakout['is_breakout']:
-                print(f"   🔥 BREAKOUT DETECTED: {breakout['direction']} "
-                      f"(strength: {breakout['strength']:.2f}x)")
-                signal_type = breakout['direction']
-                base_confidence = 0.75  # High confidence for breakouts
-                reasoning = f"Volatility breakout: {breakout['reasoning']}"
-            else:
-                print(f"   ℹ️ No breakout (volatility: {breakout['strength']:.2f}x)")
-                signal_type = hmm_context['signal']
-                base_confidence = max(state_confidence, hmm_context['confidence'])
-                reasoning = hmm_context['reasoning']
+            signal_type = hmm_context['signal']
+            base_confidence = hmm_context['confidence']
+            reasoning = hmm_context['reasoning']
             
-            if signal_type == 'WAIT' and not breakout['is_breakout']:
+            if signal_type == 'WAIT':
                 return self._return_wait(reasoning)
             
-            # 4. ✅ NEW: Discounted entry check (with trend strength)
-            print("\n4️⃣ ENTRY PRICE ANALYSIS")
-            trend_strength = market_analysis.get('trend_strength', 0.5)
-            discount_check = self._detect_discounted_entry(denoised_prices, signal_type, 
-                                                           support, resistance, trend_strength)
-            print(f"   📊 {discount_check['reason']}")
+            # 4. ✅ NEW: WHIPSAW DETECTION
+            print("\n4️⃣ WHIPSAW DETECTION")
+            whipsaw = self.whipsaw_detector.detect_whipsaw_risk(kalman_prices, volumes)
+            print(f"   ⚠️  Risk: {whipsaw['whipsaw_risk']} (level: {whipsaw['risk_level']:.1%})")
+            print(f"   ⚠️  Expected direction: {whipsaw['expected_direction']}")
+            print(f"   ⚠️  {whipsaw['reasoning']}")
             
-            if discount_check['should_wait'] and not breakout['is_breakout']:
-                # Return WAIT with distance info
-                return self._return_wait_with_distance(
-                    f"Price not at discounted level. {discount_check['reason']}",
-                    discount_check['distance_from_discount'],
-                    discount_check['distance_pct'],
-                    signal_type
-                )
+            # Adjust confidence based on whipsaw risk
+            if whipsaw['whipsaw_risk'] == 'HIGH':
+                confidence_adjustment = -0.2
+                print(f"   ❌ HIGH whipsaw risk - reducing confidence by 20%")
+            elif whipsaw['whipsaw_risk'] == 'MEDIUM':
+                confidence_adjustment = -0.1
+                print(f"   ⚠️  MEDIUM whipsaw risk - reducing confidence by 10%")
+            else:
+                confidence_adjustment = 0.0
+                print(f"   ✅ LOW whipsaw risk - proceeding normally")
             
-            if discount_check['is_discounted']:
-                print(f"   ✅ Discounted entry confirmed ({discount_check['discount_pct']:.1f}%)")
-                base_confidence = min(1.0, base_confidence + 0.1)
+            final_confidence = max(0.3, base_confidence + confidence_adjustment)
             
-            print(f"   ✅ Signal: {signal_type} (confidence: {base_confidence:.1%})")
+            if whipsaw['whipsaw_risk'] == 'HIGH' and final_confidence < 0.50:
+                return self._return_wait(f"High whipsaw risk detected. Expected {whipsaw['expected_direction']} movement. Waiting for confirmation.")
             
-            # 5. ✅ ENHANCED: TP/SL with learning-adjusted confidence
-            print("\n5️⃣ TP/SL CALCULATION (Learning-Enhanced)")
+            # 5. CALCULATE TP/SL
+            print("\n5️⃣ TP/SL CALCULATION")
             
             try:
-                # Use learned confidence level
-                mc_confidence = self.learning_state['mc_confidence']
-                print(f"   📚 Using learned confidence: {mc_confidence:.2%}")
-                
-                self.mc_optimizer.confidence_level = mc_confidence
                 mc_result = self.mc_optimizer.calculate_tp_sl(
-                    prices=denoised_prices,
+                    prices=kalman_prices,
                     current_price=current_price,
                     signal_type=signal_type,
                     time_horizon=50
                 )
                 
-                # ✅ NEW: Adjust TP based on S/R
-                mc_tp = mc_result['tp']
-                adjusted_tp = self._calculate_tp_with_sr(current_price, signal_type, 
-                                                         mc_tp, support, resistance)
+                tp = float(mc_result['tp'])
+                sl = float(mc_result['sl'])
                 
-                # ✅ NEW: Adjust SL based on liquidity zones
-                liquidity = self._find_liquidity_zones(denoised_prices)
-                
-                if signal_type == 'BUY':
-                    # SL below nearest swing low
-                    sl = liquidity['nearest_swing_low'] * 0.999
-                else:
-                    # SL above nearest swing high
-                    sl = liquidity['nearest_swing_high'] * 1.001
-                
-                print(f"   ✅ Monte Carlo Success")
-                print(f"      Entry: {current_price:.2f}")
-                print(f"      TP: {adjusted_tp:.2f} (adjusted from {mc_tp:.2f})")
-                print(f"      SL: {sl:.2f} (liquidity-based)")
-                print(f"      Liquidity zones: {liquidity['liquidity_clusters']}")
-                
-                tp_sl_source = "MC + S/R + Liquidity"
+                print(f"   ✅ Entry: {current_price:.4f}")
+                print(f"   ✅ TP: {tp:.4f} | SL: {sl:.4f}")
+                print(f"   ✅ R:R: {abs(tp - current_price) / abs(current_price - sl):.2f}:1")
                 
             except Exception as e:
-                print(f"   ⚠️ Monte Carlo failed: {str(e)}")
-                print(f"   ⏮️ FALLBACK to ATR")
-                
-                atr_result = self.atr_calc.calculate_tp_sl(denoised_prices, current_price, signal_type)
-                adjusted_tp = float(atr_result['tp'])
+                print(f"   ❌ Monte Carlo failed: {e}")
+                atr_result = self.atr_calc.calculate_tp_sl(kalman_prices, current_price, signal_type)
+                tp = float(atr_result['tp'])
                 sl = float(atr_result['sl'])
-                
-                tp_sl_source = "ATR (Fallback)"
-                reasoning += " | MC failed, used ATR"
             
-            # 6. Risk validation
+            # 6. RISK VALIDATION
             print("\n6️⃣ RISK METRICS")
-            
-            risk_metrics = self._compute_risk_metrics(denoised_prices, current_price, 
-                                                      adjusted_tp, sl, signal_type)
+            risk_metrics = self._compute_risk_metrics(kalman_prices, current_price, tp, sl, signal_type)
             print(f"   ✅ R:R: {risk_metrics['risk_reward_ratio']:.2f}:1")
             print(f"   ✅ Expected Value: {risk_metrics['expected_value_pct']:.2f}%")
             
-            if risk_metrics['risk_reward_ratio'] < 0.9:
+            if risk_metrics['risk_reward_ratio'] < 1.0:
                 return self._return_wait(f"R:R too low: {risk_metrics['risk_reward_ratio']:.2f}:1")
             
-            # ✅ NEW: Track trade for learning
-            self._update_learning(signal_type, current_price, adjusted_tp, sl)
-            
-            print("\n✅ SIGNAL APPROVED")
+            # ✅ FINAL OUTPUT: SIMPLE BUY/SELL FOR MT5
+            print("\n✅ SIGNAL APPROVED - SENDING TO MT5")
+            print(f"   Signal Type: {signal_type}")
+            print(f"   Confidence: {final_confidence:.1%}")
+            print(f"   Whipsaw Risk: {whipsaw['whipsaw_risk']}")
             print("="*70 + "\n")
             
             return {
+                "signal": signal_type,  # BUY or SELL (MT5 understands this)
                 "signal_type": signal_type,
                 "entry": float(current_price),
-                "tp": float(adjusted_tp),
+                "tp": float(tp),
                 "sl": float(sl),
-                "confidence": float(base_confidence),
+                "confidence": float(final_confidence),
                 "reasoning": reasoning,
-                "tp_sl_source": tp_sl_source,
-                "market_context": hmm_context['context'],
+                "whipsaw_risk": whipsaw['whipsaw_risk'],
+                "whipsaw_direction": whipsaw['expected_direction'],
                 "risk_metrics": risk_metrics,
-                "is_breakout": breakout['is_breakout'],
-                "is_discounted": discount_check['is_discounted'],
                 "learning_stats": {
                     "win_rate": self.learning_state['win_rate'],
-                    "trades_count": len(self.learning_state['trades']),
-                    "mc_confidence": self.learning_state['mc_confidence']
+                    "trades_count": len(self.learning_state['trades'])
                 }
             }
         
@@ -594,71 +426,29 @@ class SignalGenerator:
             risk = sl - current_price
         
         rr = float(reward / risk) if risk > 0 else 0.0
-        profit_pct = float((reward / current_price) * 100) if current_price > 0 else 0.0
-        loss_pct = float((risk / current_price) * 100) if current_price > 0 else 0.0
-        
-        total = reward + risk
-        prob_tp = float(reward / total) if total > 0 else 0.5
-        expected_value = float(prob_tp * reward - (1 - prob_tp) * risk)
-        expected_value_pct = float((expected_value / current_price) * 100) if current_price > 0 else 0.0
         
         return {
             'risk_reward_ratio': rr,
-            'potential_profit_pct': profit_pct,
-            'potential_loss_pct': loss_pct,
-            'prob_tp_hit': prob_tp,
-            'prob_sl_hit': float(1.0 - prob_tp),
-            'expected_value': expected_value,
-            'expected_value_pct': expected_value_pct
+            'potential_profit_pct': float((reward / current_price) * 100) if current_price > 0 else 0.0,
+            'potential_loss_pct': float((risk / current_price) * 100) if current_price > 0 else 0.0,
+            'expected_value': float((reward * 0.5) - (risk * 0.5))
         }
 
     def _return_wait(self, reason: str) -> Dict:
         """Return WAIT signal"""
         return {
+            "signal": "WAIT",
             "signal_type": "WAIT",
             "entry": 0.0,
             "tp": 0.0,
             "sl": 0.0,
             "confidence": 0.0,
             "reasoning": reason,
-            "market_context": "N/A",
+            "whipsaw_risk": "UNKNOWN",
             "risk_metrics": {
-                "risk_reward_ratio": 0.0,
-                "potential_profit_pct": 0.0,
-                "potential_loss_pct": 0.0,
-                "prob_tp_hit": 0.0,
-                "prob_sl_hit": 0.0,
-                "expected_value": 0.0,
-                "expected_value_pct": 0.0
-            }
-        }
-    
-    def _return_wait_with_distance(self, reason: str, distance: float, 
-                                   distance_pct: float, signal_type: str) -> Dict:
-        """
-        Return WAIT signal with distance to discount zone
-        """
-        return {
-            "signal_type": "WAIT",
-            "entry": 0.0,
-            "tp": 0.0,
-            "sl": 0.0,
-            "confidence": 0.0,
-            "reasoning": reason,
-            "market_context": "N/A",
-            "distance_info": {
-                "distance_from_discount": float(distance),
-                "distance_pct": float(distance_pct),
-                "direction": signal_type,
-                "message": f"Price needs to move ${abs(distance):.2f} ({distance_pct:.1f}% of range) to reach discount zone"
-            },
-            "risk_metrics": {
-                "risk_reward_ratio": 0.0,
-                "potential_profit_pct": 0.0,
-                "potential_loss_pct": 0.0,
-                "prob_tp_hit": 0.0,
-                "prob_sl_hit": 0.0,
-                "expected_value": 0.0,
-                "expected_value_pct": 0.0
+                'risk_reward_ratio': 0.0,
+                'potential_profit_pct': 0.0,
+                'potential_loss_pct': 0.0,
+                'expected_value': 0.0
             }
         }

@@ -397,32 +397,71 @@ def check_news_before_trade() -> tuple[bool, str]:
 
 
 def post_to_community_trading(symbol: str, signal: Dict):
-    """Post signal to MT5 community trading platform"""
+    """Post signal to MT5 community trading platform - ENHANCED LOGGING"""
     try:
+        signal_type = signal.get('signal_type', 'WAIT')
+        
+        # ✅ NEW: Check signal validity before posting
+        if signal_type == 'WAIT':
+            print(f"⏭️ Skipping WAIT signal for {symbol} (no action needed)")
+            return
+        
         payload = {
             "symbol": symbol,
-            "action": signal['signal_type'],
-            "entry": signal['entry'],
-            "tp": signal['tp'],
-            "sl": signal['sl'],
-            "confidence": signal['confidence'],
-            "reasoning": signal['reasoning']
+            "action": signal_type,  # BUY or SELL
+            "entry": float(signal.get('entry', 0)),
+            "tp": float(signal.get('tp', 0)),
+            "sl": float(signal.get('sl', 0)),
+            "volume": 0.01,  # Default volume
+            "confidence": float(signal.get('confidence', 0)),
+            "reasoning": signal.get('reasoning', 'No reasoning')
         }
         
+        print(f"\n🚀 POSTING TO MT5 COMMUNITY TRADING:")
+        print(f"   Symbol: {symbol}")
+        print(f"   Action: {signal_type}")
+        print(f"   Entry: {payload['entry']:.4f}")
+        print(f"   TP: {payload['tp']:.4f} | SL: {payload['sl']:.4f}")
+        print(f"   Confidence: {payload['confidence']:.1%}")
+        print(f"   Target: {COMMUNITY_TRADING_URL}/api/signal")
+        
         response = requests.post(
-            f"{COMMUNITY_TRADING_URL}/api/signals/external",
+            f"{COMMUNITY_TRADING_URL}/api/signal",  # Changed endpoint
             json=payload,
-            headers={"X-API-Key": COMMUNITY_API_KEY},
+            headers={
+                "X-API-Key": COMMUNITY_API_KEY,
+                "Content-Type": "application/json"
+            },
             timeout=5
         )
         
         if response.status_code == 200:
-            print(f"✅ Signal posted to community platform")
+            response_data = response.json()
+            signal_id = response_data.get('signal_id', 'unknown')
+            print(f"✅ SENT TO MT5: Signal ID {signal_id}")
+            print(f"   Response: {response.text[:100]}")
+        elif response.status_code == 403:
+            print(f"❌ AUTHENTICATION FAILED: Invalid API key")
+            print(f"   Expected key: {COMMUNITY_API_KEY}")
+        elif response.status_code == 404:
+            print(f"❌ ENDPOINT NOT FOUND: {COMMUNITY_TRADING_URL}/api/signal")
+            print(f"   Check if MT5 backend is running at {COMMUNITY_TRADING_URL}")
         else:
-            print(f"⚠️ Community platform returned {response.status_code}")
+            print(f"⚠️ MT5 BACKEND ERROR: {response.status_code}")
+            print(f"   Response: {response.text[:200]}")
+    
+    except requests.exceptions.ConnectionError as e:
+        print(f"❌ CANNOT REACH MT5 BACKEND: {COMMUNITY_TRADING_URL}")
+        print(f"   Error: {e}")
+        print(f"   Is the MT5 backend running?")
+    
+    except requests.exceptions.Timeout:
+        print(f"❌ MT5 BACKEND TIMEOUT: Request took >5 seconds")
     
     except Exception as e:
-        print(f"❌ Failed to post to community: {e}")
+        print(f"❌ ERROR POSTING TO MT5: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 def build_wait_response(symbol: str, price: float, reason: str, timeframe: str) -> tuple:
