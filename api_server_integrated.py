@@ -1,5 +1,5 @@
 """
-API SERVER INTEGRATED - Enhanced with WebSocket Support
+API SERVER INTEGRATED - Enhanced with WebSocket Support & Logging
 Single deployment point with real-time analysis capabilities
 """
 import os
@@ -13,6 +13,7 @@ import threading
 import json
 from typing import Dict, Set
 from datetime import datetime
+import logging
 
 # Core integration
 from model_manager import get_model_manager
@@ -23,6 +24,10 @@ load_dotenv()
 # Flask setup
 app = Flask(__name__)
 sock = Sock(app)
+
+# ✅ ENHANCED LOGGING SETUP
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 ALLOWED_ORIGINS = os.getenv('ALLOWED_ORIGINS', '*').split(',')
 CORS(app, resources={
@@ -42,11 +47,14 @@ NEWS_MODEL_URL = os.getenv('NEWS_MODEL_URL', 'https://anso-vision-news-model.onr
 COMMUNITY_TRADING_URL = os.getenv('COMMUNITY_TRADING_URL', 'https://ansorade-backend.onrender.com')
 COMMUNITY_API_KEY = os.getenv('COMMUNITY_API_KEY', 'Mr.creative090')
 
+logger.info(f"Signal Generator → MT5 API: {COMMUNITY_TRADING_URL}/api/signal")
+logger.info(f"API Key: {'*' * len(COMMUNITY_API_KEY)}")
+
 # WebSocket connection manager
 class WebSocketManager:
     def __init__(self):
-        self.connections: Dict[str, Set] = {}  # symbol -> set of websockets
-        self.last_signals: Dict[str, Dict] = {}  # symbol -> last signal
+        self.connections: Dict[str, Set] = {}
+        self.last_signals: Dict[str, Dict] = {}
         self.lock = threading.Lock()
     
     def subscribe(self, ws, symbol: str):
@@ -54,9 +62,8 @@ class WebSocketManager:
             if symbol not in self.connections:
                 self.connections[symbol] = set()
             self.connections[symbol].add(ws)
-            print(f"✅ WebSocket subscribed to {symbol}. Total: {len(self.connections[symbol])}")
+            logger.info(f"✅ WebSocket subscribed to {symbol}. Total: {len(self.connections[symbol])}")
             
-            # Send last signal if exists
             if symbol in self.last_signals:
                 self._send_safe(ws, {
                     "type": "signal_update",
@@ -69,11 +76,10 @@ class WebSocketManager:
         with self.lock:
             if symbol in self.connections:
                 self.connections[symbol].discard(ws)
-                print(f"❌ WebSocket unsubscribed from {symbol}")
+                logger.info(f"❌ WebSocket unsubscribed from {symbol}")
     
     def broadcast_signal(self, symbol: str, signal: Dict):
         with self.lock:
-            # Check if signal changed
             last_signal = self.last_signals.get(symbol, {})
             signal_changed = (
                 last_signal.get('signal_type') != signal.get('signal_type') or
@@ -81,7 +87,7 @@ class WebSocketManager:
             )
             
             if signal_changed:
-                print(f"🔔 {symbol}: Signal changed - {signal['signal_type']} @ {signal.get('confidence', 0):.1%}")
+                logger.info(f"🔔 {symbol}: Signal changed - {signal['signal_type']} @ {signal.get('confidence', 0):.1%}")
             
             self.last_signals[symbol] = signal
             
@@ -101,7 +107,6 @@ class WebSocketManager:
                 if not self._send_safe(ws, message):
                     disconnected.add(ws)
             
-            # Clean up disconnected
             for ws in disconnected:
                 self.connections[symbol].discard(ws)
     
@@ -114,17 +119,11 @@ class WebSocketManager:
 
 ws_manager = WebSocketManager()
 
-# ----------------------------------------------------------------------
-# WEBSOCKET ENDPOINT
-# ----------------------------------------------------------------------
-
+# ✅ WebSocket endpoint
 @sock.route('/ws/signals')
 def websocket_signals(ws):
-    """
-    WebSocket endpoint for real-time signal updates
-    Client sends: {"action": "subscribe", "symbol": "BTCUSD"}
-    """
-    print("🔌 WebSocket client connected")
+    """WebSocket endpoint for real-time signal updates"""
+    logger.info("🔌 WebSocket client connected")
     
     try:
         while True:
@@ -156,31 +155,26 @@ def websocket_signals(ws):
                 ws.send(json.dumps({"type": "pong"}))
     
     except Exception as e:
-        print(f"WebSocket error: {e}")
+        logger.error(f"WebSocket error: {e}")
     finally:
-        print("🔌 WebSocket client disconnected")
+        logger.info("🔌 WebSocket client disconnected")
 
-# ----------------------------------------------------------------------
-# API ROUTES
-# ----------------------------------------------------------------------
-
+# ✅ API Routes
 @app.route('/health', methods=['GET'])
 def health_check():
     return jsonify({
         'status': 'healthy',
         'service': 'Anso Vision Backend',
-        'version': '3.0.0',
+        'version': '3.1.0',
         'websocket_connections': sum(len(conns) for conns in ws_manager.connections.values()),
-        'tracked_symbols': list(ws_manager.last_signals.keys())
+        'tracked_symbols': list(ws_manager.last_signals.keys()),
+        'mt5_backend': COMMUNITY_TRADING_URL
     }), 200
 
 
 @app.route('/api/candle-complete', methods=['POST'])
 def candle_complete():
-    """
-    Called by data fetcher when a new candle completes
-    Triggers automatic analysis and broadcasts to WebSocket clients
-    """
+    """Called when a new candle completes"""
     try:
         data = request.json
         symbol = data.get('symbol')
@@ -189,24 +183,22 @@ def candle_complete():
         if not symbol or not candles:
             return jsonify({'error': 'Missing symbol or candles'}), 400
         
-        print(f"\n🕯️ Candle completed: {symbol} ({len(candles)} candles)")
+        logger.info(f"🕯️ Candle completed: {symbol} ({len(candles)} candles)")
         
-        # Extract prices and volumes
         prices = np.array([c.get('close', 0) for c in candles])
         volumes = np.array([c.get('volume', 1.0) for c in candles])
         
         if len(prices) < 250:
-            print(f"⚠️ Not enough data: {len(prices)}/250 candles")
+            logger.warning(f"⚠️ Not enough data: {len(prices)}/250 candles")
             return jsonify({
                 'status': 'insufficient_data',
                 'required': 250,
                 'received': len(prices)
             }), 200
         
-        # Check news
         trade_allowed, news_reason = check_news_before_trade()
         if not trade_allowed:
-            print(f"⚠️ Trade blocked by news: {news_reason}")
+            logger.warning(f"⚠️ Trade blocked by news: {news_reason}")
             signal_result = {
                 'signal_type': 'WAIT',
                 'entry': float(prices[-1]),
@@ -217,24 +209,19 @@ def candle_complete():
                 'market_context': 'High-impact news'
             }
         else:
-            # Generate signal
-            print(f"🧠 Generating signal for {symbol}...")
+            logger.info(f"🧠 Generating signal for {symbol}...")
             signal_result = model_manager.generate_signal(symbol, prices, volumes)
             
-            # Record if not WAIT
             if signal_result.get('signal_type') != 'WAIT':
                 risk_manager.record_signal(
                     symbol,
                     signal_result['signal_type'],
                     signal_result.get('confidence', 0.0)
                 )
+                # ✅ Post to MT5
+                post_to_community_trading(symbol, signal_result)
         
-        # Broadcast to WebSocket clients
         ws_manager.broadcast_signal(symbol, signal_result)
-        
-        # Post to community trading if not WAIT
-        if signal_result.get('signal_type') != 'WAIT':
-            post_to_community_trading(symbol, signal_result)
         
         return jsonify({
             'status': 'success',
@@ -244,18 +231,13 @@ def candle_complete():
         }), 200
     
     except Exception as e:
-        print(f"❌ Error in candle_complete: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"❌ Error in candle_complete: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 
 @app.route('/analyze', methods=['POST', 'OPTIONS'])
 def analyze_signal():
-    """
-    Main endpoint for frontend signal analysis
-    Expects: { symbol, candles: [{timestamp, open, high, low, close, volume}], timeframe }
-    """
+    """Main endpoint for frontend signal analysis"""
     if request.method == 'OPTIONS':
         return jsonify({'status': 'ok'}), 200
     
@@ -265,11 +247,11 @@ def analyze_signal():
         candles = data.get('candles', [])
         timeframe = data.get('timeframe', '1h')
         
-        print(f"\n{'='*70}")
-        print(f"📊 /analyze request for {symbol}")
-        print(f"   Candles: {len(candles)}")
-        print(f"   Timeframe: {timeframe}")
-        print(f"{'='*70}")
+        logger.info(f"\n{'='*70}")
+        logger.info(f"📊 /analyze request for {symbol}")
+        logger.info(f"   Candles: {len(candles)}")
+        logger.info(f"   Timeframe: {timeframe}")
+        logger.info(f"{'='*70}")
         
         if not symbol:
             return jsonify({
@@ -282,7 +264,7 @@ def analyze_signal():
         if len(candles) < 250:
             return jsonify({
                 'success': False,
-                'error': f'Insufficient data: Need 250 candles for stable HMM training, got {len(candles)}',
+                'error': f'Insufficient data: Need 250 candles, got {len(candles)}',
                 'symbol': symbol,
                 'signal': 'HOLD',
                 'signal_type': 'ERROR',
@@ -290,11 +272,9 @@ def analyze_signal():
                 'tp': 0,
                 'sl': 0,
                 'confidence': 0,
-                'reasoning': f'Insufficient data: HMM requires 250 candles. Got {len(candles)}. Please fetch more historical data.',
-                'market_context': 'N/A'
+                'reasoning': f'Insufficient data: need 250 candles, got {len(candles)}'
             }), 400
         
-        # Extract prices and volumes
         prices = np.array([c.get('close', 0) for c in candles])
         volumes = np.array([c.get('volume', 0) for c in candles])
         
@@ -307,40 +287,32 @@ def analyze_signal():
                 'signal_type': 'ERROR'
             }), 400
         
-        # Check news
         trade_allowed, news_reason = check_news_before_trade()
         if not trade_allowed:
             return build_wait_response(symbol, prices[-1], f'News block: {news_reason}', timeframe)
         
-        # Check risk manager
         allowed, risk_reason = risk_manager.should_allow_signal(symbol, 'UNKNOWN')
         if not allowed:
             return build_wait_response(symbol, prices[-1], f'Risk limit: {risk_reason}', timeframe)
         
-        # Generate signal
-        print(f"🧠 Generating signal...")
+        logger.info(f"🧠 Generating signal...")
         signal_result = model_manager.generate_signal(symbol, prices, volumes)
         
         if signal_result is None or signal_result.get('error', False):
             error_msg = signal_result.get('error_message', 'Unknown error') if signal_result else 'Signal generation returned None'
             return build_wait_response(symbol, prices[-1], error_msg, timeframe)
         
-        # Record signal if not WAIT
         signal_type = signal_result.get('signal_type', 'WAIT')
         if signal_type != 'WAIT':
             risk_manager.record_signal(symbol, signal_type, signal_result.get('confidence', 0.0))
         
-        # Build response
         response = build_signal_response(symbol, signal_result, timeframe, prices[-1])
         
-        print(f"✅ Signal generated: {signal_type}")
+        logger.info(f"✅ Signal generated: {signal_type}")
         return jsonify(response), 200
         
     except Exception as e:
-        print(f"❌ Error in /analyze: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        
+        logger.error(f"❌ Error in /analyze: {str(e)}", exc_info=True)
         return jsonify({
             'success': False,
             'error': f'Internal error: {str(e)}',
@@ -374,15 +346,13 @@ def generate_signal_route(symbol):
     
     if signal_result.get('signal_type') != 'WAIT':
         risk_manager.record_signal(symbol, signal_result['signal_type'], signal_result.get('confidence', 0.0))
+        post_to_community_trading(symbol, signal_result)
         
     return jsonify(signal_result), 200
 
 
-# ----------------------------------------------------------------------
-# HELPER FUNCTIONS
-# ----------------------------------------------------------------------
-
-def check_news_before_trade() -> tuple[bool, str]:
+# ✅ HELPER FUNCTIONS
+def check_news_before_trade() -> tuple:
     """Check if high-impact news allows trading"""
     try:
         response = requests.get(f"{NEWS_MODEL_URL}/should-trade", timeout=3)
@@ -397,36 +367,38 @@ def check_news_before_trade() -> tuple[bool, str]:
 
 
 def post_to_community_trading(symbol: str, signal: Dict):
-    """Post signal to MT5 community trading platform - ENHANCED LOGGING"""
+    """✅ ENHANCED: Post signal to MT5 community trading platform with detailed logging"""
     try:
         signal_type = signal.get('signal_type', 'WAIT')
         
-        # ✅ NEW: Check signal validity before posting
         if signal_type == 'WAIT':
-            print(f"⏭️ Skipping WAIT signal for {symbol} (no action needed)")
+            logger.info(f"⏭️ Skipping WAIT signal for {symbol}")
             return
         
         payload = {
             "symbol": symbol,
-            "action": signal_type,  # BUY or SELL
+            "action": signal_type,
             "entry": float(signal.get('entry', 0)),
             "tp": float(signal.get('tp', 0)),
             "sl": float(signal.get('sl', 0)),
-            "volume": 0.01,  # Default volume
+            "volume": 0.01,
             "confidence": float(signal.get('confidence', 0)),
             "reasoning": signal.get('reasoning', 'No reasoning')
         }
         
-        print(f"\n🚀 POSTING TO MT5 COMMUNITY TRADING:")
-        print(f"   Symbol: {symbol}")
-        print(f"   Action: {signal_type}")
-        print(f"   Entry: {payload['entry']:.4f}")
-        print(f"   TP: {payload['tp']:.4f} | SL: {payload['sl']:.4f}")
-        print(f"   Confidence: {payload['confidence']:.1%}")
-        print(f"   Target: {COMMUNITY_TRADING_URL}/api/signal")
+        logger.info("\n" + "="*70)
+        logger.info("🚀 POSTING SIGNAL TO MT5 BACKEND")
+        logger.info("="*70)
+        logger.info(f"Symbol: {symbol}")
+        logger.info(f"Action: {signal_type}")
+        logger.info(f"Entry: {payload['entry']:.4f}")
+        logger.info(f"TP: {payload['tp']:.4f} | SL: {payload['sl']:.4f}")
+        logger.info(f"Confidence: {payload['confidence']:.1%}")
+        logger.info(f"Target URL: {COMMUNITY_TRADING_URL}/api/signal")
+        logger.info(f"API Key: {'*' * len(COMMUNITY_API_KEY)}")
         
         response = requests.post(
-            f"{COMMUNITY_TRADING_URL}/api/signal",  # Changed endpoint
+            f"{COMMUNITY_TRADING_URL}/api/signal",
             json=payload,
             headers={
                 "X-API-Key": COMMUNITY_API_KEY,
@@ -438,30 +410,29 @@ def post_to_community_trading(symbol: str, signal: Dict):
         if response.status_code == 200:
             response_data = response.json()
             signal_id = response_data.get('signal_id', 'unknown')
-            print(f"✅ SENT TO MT5: Signal ID {signal_id}")
-            print(f"   Response: {response.text[:100]}")
+            logger.info(f"✅ SIGNAL POSTED TO MT5 SUCCESSFULLY")
+            logger.info(f"   Signal ID: {signal_id}")
+            logger.info(f"   Response: {response.text[:150]}")
+            logger.info("="*70 + "\n")
         elif response.status_code == 403:
-            print(f"❌ AUTHENTICATION FAILED: Invalid API key")
-            print(f"   Expected key: {COMMUNITY_API_KEY}")
+            logger.error(f"❌ AUTHENTICATION FAILED: Invalid API key")
+            logger.error(f"   Expected key: {COMMUNITY_API_KEY}")
         elif response.status_code == 404:
-            print(f"❌ ENDPOINT NOT FOUND: {COMMUNITY_TRADING_URL}/api/signal")
-            print(f"   Check if MT5 backend is running at {COMMUNITY_TRADING_URL}")
+            logger.error(f"❌ ENDPOINT NOT FOUND: {COMMUNITY_TRADING_URL}/api/signal")
+            logger.error(f"   Is MT5 backend running?")
         else:
-            print(f"⚠️ MT5 BACKEND ERROR: {response.status_code}")
-            print(f"   Response: {response.text[:200]}")
+            logger.error(f"⚠️ MT5 BACKEND ERROR: HTTP {response.status_code}")
+            logger.error(f"   Response: {response.text[:200]}")
     
     except requests.exceptions.ConnectionError as e:
-        print(f"❌ CANNOT REACH MT5 BACKEND: {COMMUNITY_TRADING_URL}")
-        print(f"   Error: {e}")
-        print(f"   Is the MT5 backend running?")
+        logger.error(f"❌ CANNOT REACH MT5 BACKEND: {COMMUNITY_TRADING_URL}")
+        logger.error(f"   Error: {e}")
     
     except requests.exceptions.Timeout:
-        print(f"❌ MT5 BACKEND TIMEOUT: Request took >5 seconds")
+        logger.error(f"❌ MT5 BACKEND TIMEOUT: Request took >5 seconds")
     
     except Exception as e:
-        print(f"❌ ERROR POSTING TO MT5: {type(e).__name__}: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.error(f"❌ ERROR POSTING TO MT5: {type(e).__name__}: {e}", exc_info=True)
 
 
 def build_wait_response(symbol: str, price: float, reason: str, timeframe: str) -> tuple:
@@ -482,8 +453,6 @@ def build_wait_response(symbol: str, price: float, reason: str, timeframe: str) 
             'risk_reward_ratio': 0,
             'potential_profit_pct': 0,
             'potential_loss_pct': 0,
-            'prob_tp_hit': 0,
-            'prob_sl_hit': 0,
             'expected_value': 0,
             'expected_value_pct': 0
         }
@@ -511,31 +480,23 @@ def build_signal_response(symbol: str, signal_result: Dict, timeframe: str, curr
         'reasoning': signal_result.get('reasoning', 'No reasoning provided'),
         'market_context': signal_result.get('market_context', 'N/A'),
         'timeframe': timeframe,
-        'distance_info': signal_result.get('distance_info'),  # NEW: Distance tracking
-        'is_breakout': signal_result.get('is_breakout', False),  # NEW: Breakout flag
-        'is_discounted': signal_result.get('is_discounted', False),  # NEW: Discount flag
-        'learning_stats': signal_result.get('learning_stats'),  # NEW: Learning metrics
+        'learning_stats': signal_result.get('learning_stats'),
         'risk_metrics': signal_result.get('risk_metrics', {
             'risk_reward_ratio': 0,
             'potential_profit_pct': 0,
             'potential_loss_pct': 0,
-            'prob_tp_hit': 0,
-            'prob_sl_hit': 0,
             'expected_value': 0,
             'expected_value_pct': 0
         })
     }
 
 
-# ----------------------------------------------------------------------
-# ENTRY POINT
-# ----------------------------------------------------------------------
-
+# ✅ ENTRY POINT
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8000))
     debug = os.environ.get('DEBUG', 'False').lower() == 'true'
-    print(f"🚀 Starting Enhanced API Server on port {port}")
-    print(f"   • WebSocket: /ws/signals")
-    print(f"   • REST API: /analyze, /api/candle-complete")
-    print(f"   • Community Trading: {COMMUNITY_TRADING_URL}")
+    logger.info(f"🚀 Starting Enhanced API Server on port {port}")
+    logger.info(f"   • WebSocket: /ws/signals")
+    logger.info(f"   • REST API: /analyze, /api/candle-complete")
+    logger.info(f"   • Community Trading: {COMMUNITY_TRADING_URL}")
     app.run(host='0.0.0.0', port=port, debug=debug)
