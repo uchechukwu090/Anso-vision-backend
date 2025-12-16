@@ -212,6 +212,11 @@ class SignalGenerator:
         print(f"   • Kalman frequency: ENABLED")
         print(f"   • Wavelet: REMOVED (Kalman does smoothing)")
 
+    def _get_state_name(self, state_index: int) -> str:
+        """Convert HMM state index to readable name"""
+        state_names = {0: 'TRENDING_UP', 1: 'RANGING', 2: 'TRENDING_DOWN'}
+        return state_names.get(state_index, 'RANGING')
+    
     def _load_learning_state(self) -> Dict:
         """Load or initialize learning state"""
         if os.path.exists(LEARNING_FILE):
@@ -355,11 +360,19 @@ class SignalGenerator:
             print("\n5️⃣ TP/SL CALCULATION")
             
             try:
+                # ✅ NEW: Pass HMM state and market metrics to MC for adaptive behavior
+                hmm_state_name = self._get_state_name(latest_state_index)
+                market_volatility = kalman_info['volatility']
+                market_momentum = self.market_analyzer.calculate_momentum(kalman_prices)
+                
                 mc_result = self.mc_optimizer.calculate_tp_sl(
                     prices=kalman_prices,
                     current_price=current_price,
                     signal_type=signal_type,
-                    time_horizon=50
+                    time_horizon=50,
+                    volatility=market_volatility,
+                    trend_state=hmm_state_name,
+                    momentum=market_momentum
                 )
                 
                 tp = float(mc_result['tp'])
