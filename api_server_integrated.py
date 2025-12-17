@@ -1,6 +1,6 @@
 """
 API SERVER INTEGRATED - Enhanced with WebSocket Support & Logging
-Single deployment point with real-time analysis capabilities
+✅ FIXED: Now includes limit_orders and all fields in signal transmission
 """
 import os
 import requests
@@ -165,7 +165,7 @@ def health_check():
     return jsonify({
         'status': 'healthy',
         'service': 'Anso Vision Backend',
-        'version': '3.1.0',
+        'version': '3.2.0',
         'websocket_connections': sum(len(conns) for conns in ws_manager.connections.values()),
         'tracked_symbols': list(ws_manager.last_signals.keys()),
         'mt5_backend': COMMUNITY_TRADING_URL
@@ -367,7 +367,7 @@ def check_news_before_trade() -> tuple:
 
 
 def post_to_community_trading(symbol: str, signal: Dict):
-    """✅ ENHANCED: Post signal to MT5 community trading platform with detailed logging"""
+    """✅ ENHANCED: Post signal to MT5 with ALL FIELDS including limit_orders"""
     try:
         signal_type = signal.get('signal_type', 'WAIT')
         
@@ -375,6 +375,7 @@ def post_to_community_trading(symbol: str, signal: Dict):
             logger.info(f"⏭️ Skipping WAIT signal for {symbol}")
             return
         
+        # ✅ INCLUDE ALL FIELDS from signal generator
         payload = {
             "symbol": symbol,
             "action": signal_type,
@@ -383,7 +384,9 @@ def post_to_community_trading(symbol: str, signal: Dict):
             "sl": float(signal.get('sl', 0)),
             "volume": 0.01,
             "confidence": float(signal.get('confidence', 0)),
-            "reasoning": signal.get('reasoning', 'No reasoning')
+            "reasoning": signal.get('reasoning', 'No reasoning'),
+            "limit_orders": signal.get('limit_orders', False),  # ✅ NEW: Limit orders support
+            "timeframe": "1h"
         }
         
         logger.info("\n" + "="*70)
@@ -394,6 +397,8 @@ def post_to_community_trading(symbol: str, signal: Dict):
         logger.info(f"Entry: {payload['entry']:.4f}")
         logger.info(f"TP: {payload['tp']:.4f} | SL: {payload['sl']:.4f}")
         logger.info(f"Confidence: {payload['confidence']:.1%}")
+        logger.info(f"Limit Orders: {payload['limit_orders']}")  # ✅ NEW
+        logger.info(f"Reasoning: {payload['reasoning'][:60]}...")
         logger.info(f"Target URL: {COMMUNITY_TRADING_URL}/api/signal")
         logger.info(f"API Key: {'*' * len(COMMUNITY_API_KEY)}")
         
@@ -412,6 +417,8 @@ def post_to_community_trading(symbol: str, signal: Dict):
             signal_id = response_data.get('signal_id', 'unknown')
             logger.info(f"✅ SIGNAL POSTED TO MT5 SUCCESSFULLY")
             logger.info(f"   Signal ID: {signal_id}")
+            logger.info(f"   ✅ All fields saved (including limit_orders)")
+            logger.info(f"   📡 Signal stored in Supabase and ready for MT5 EA")
             logger.info(f"   Response: {response.text[:150]}")
             logger.info("="*70 + "\n")
         elif response.status_code == 403:
@@ -499,4 +506,5 @@ if __name__ == '__main__':
     logger.info(f"   • WebSocket: /ws/signals")
     logger.info(f"   • REST API: /analyze, /api/candle-complete")
     logger.info(f"   • Community Trading: {COMMUNITY_TRADING_URL}")
+    logger.info(f"   ✅ NOW SENDS limit_orders & all fields to MT5")
     app.run(host='0.0.0.0', port=port, debug=debug)
