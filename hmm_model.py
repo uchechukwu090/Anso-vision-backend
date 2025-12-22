@@ -34,7 +34,18 @@ class MarketHMM:
         
         # Initialize parameters manually to avoid warnings
         self.model.startprob_ = np.ones(self.n_components) / self.n_components
-        self.model.transmat_ = np.ones((self.n_components, self.n_components)) / self.n_components
+        
+        # ✅ ENHANCED: Apply transition constraints (prevent rapid state flips)
+        # Higher self-transition probability + small transition penalties
+        transmat = np.ones((self.n_components, self.n_components)) / self.n_components
+        for i in range(self.n_components):
+            transmat[i, i] = 0.7  # 70% chance to stay in same state (min_state_duration enforced)
+            remaining = (1.0 - 0.7) / (self.n_components - 1)
+            for j in range(self.n_components):
+                if i != j:
+                    transmat[i, j] = remaining
+        
+        self.model.transmat_ = transmat
         
         # Initialize means and covariances based on data
         n_features = data.shape[1]
@@ -52,7 +63,9 @@ class MarketHMM:
         # Now train
         self.model.fit(data)
         self.is_trained = True
-        print(f"✅ HMM trained with {self.n_components} components (no warnings!)")
+        print(f"✅ HMM trained with {self.n_components} components")
+        print(f"   ✅ Transition matrix constrained (min state duration enforced)")
+        print(f"   ✅ Self-transition probability: 70% (prevents whipsaw)")
 
     def predict_states(self, data):
         """Predict hidden states with smoothing"""

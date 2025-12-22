@@ -4,6 +4,7 @@ from filterpy.kalman import KalmanFilter
 def apply_kalman_filter(data):
     """
     Applies a Kalman filter to a 1D data array for smoothing.
+    Returns smoothed data only (backward compatible).
 
     Args:
         data (np.array): A 1D numpy array of observations.
@@ -49,6 +50,54 @@ def apply_kalman_filter(data):
         smoothed_data.append(kf.x[0, 0])
 
     return np.array(smoothed_data)
+
+def apply_kalman_filter_enhanced(data):
+    """
+    ✅ ENHANCED: Returns Kalman-filtered components for feature engineering:
+    - Smoothed price (level)
+    - Velocity (first derivative / trend)
+    - Acceleration (second derivative / rate of change of trend)
+    
+    Args:
+        data (np.array): A 1D numpy array of observations.
+    
+    Returns:
+        dict: Contains 'smoothed_price', 'velocity', 'acceleration'
+    """
+    if not isinstance(data, np.ndarray) or data.ndim != 1:
+        raise ValueError("Input data must be a 1D numpy array.")
+    
+    # Apply Kalman filter
+    kf = KalmanFilter(dim_x=2, dim_z=1)
+    kf.F = np.array([[1., 1.], [0., 1.]])  # State: [position, velocity]
+    kf.H = np.array([[1., 0.]])  # Measure position only
+    kf.P *= 1000.
+    kf.R = np.array([[5.]])
+    kf.Q = np.array([[0.1, 0.], [0., 0.01]])
+    kf.x = np.array([[data[0]], [0.]])  # Initial state
+    
+    smoothed_prices = []
+    velocities = []
+    
+    for z in data:
+        kf.predict()
+        kf.update(z)
+        smoothed_prices.append(kf.x[0, 0])
+        velocities.append(kf.x[1, 0])
+    
+    smoothed_prices = np.array(smoothed_prices)
+    velocities = np.array(velocities)
+    
+    # Calculate acceleration (rate of change of velocity)
+    acceleration = np.zeros_like(velocities)
+    for i in range(1, len(velocities)):
+        acceleration[i] = velocities[i] - velocities[i-1]
+    
+    return {
+        'smoothed_price': smoothed_prices,
+        'velocity': velocities,
+        'acceleration': acceleration
+    }
 
 if __name__ == '__main__':
     # Example usage

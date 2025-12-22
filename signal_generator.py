@@ -7,7 +7,7 @@ MASTER SIGNAL ORCHESTRATOR - CLEAN & FAST
 ✅ HMM as independent accurate core
 """
 import numpy as np
-from kalman_filter import apply_kalman_filter
+from kalman_filter import apply_kalman_filter, apply_kalman_filter_enhanced
 from hmm_model import MarketHMM
 from atr_calculator import ATRCalculator
 from monte_carlo_optimizer import MonteCarloOptimizer
