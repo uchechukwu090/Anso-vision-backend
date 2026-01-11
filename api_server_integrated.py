@@ -34,8 +34,7 @@ logging.basicConfig(
     level=logging.DEBUG,  # Changed to DEBUG for detailed logs
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('signal_system.log')
+        logging.StreamHandler()  # Only stream to stdout (Render captures this)
     ]
 )
 logger = logging.getLogger(__name__)

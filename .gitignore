@@ -2,3 +2,8 @@ __pycache__/
 unknown/
 .venv/
 *.pyc
+*.pkl
+*.log
+.env
+.vscode/
+.git/

@@ -12,3 +12,5 @@ python-dotenv
 websocket-client
 yfinance
 pandas
+gunicorn
+eventlet
