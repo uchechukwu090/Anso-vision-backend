@@ -125,7 +125,6 @@ class ModelManager:
                     try:
                         model_state.signal_generator = SignalGenerator(
                             n_hmm_components=self.n_hmm_components,
-                            covariance_type=self.covariance_type,
                             random_state=self.random_state
                         )
                         print(f"   ✅ SignalGenerator created successfully")
