@@ -2,9 +2,6 @@ flask
 flask-cors
 flask-sock
 simple-websocket
-filterpy
-hmmlearn
-PyWavelets
 numpy
 scipy
 requests
