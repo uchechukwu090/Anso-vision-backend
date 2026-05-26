@@ -230,9 +230,9 @@ def get_model_manager() -> ModelManager:
 class RiskManager:
     """Prevents overtrading and dangerous signals."""
 
-    def __init__(self, max_daily_signals: int = 20, 
-                 max_signals_per_hour: int = 5,
-                 min_signal_spacing_minutes: int = 15):
+    def __init__(self, max_daily_signals: int = 10, 
+                 max_signals_per_hour: int = 3,
+                 min_signal_spacing_minutes: int = 20):
         self.max_daily_signals = max_daily_signals
         self.max_signals_per_hour = max_signals_per_hour
         self.min_signal_spacing_minutes = min_signal_spacing_minutes
@@ -298,10 +298,11 @@ def get_risk_manager() -> RiskManager:
 # SIGNAL QUEUE & WEBSOCKET (Unchanged)
 # =============================================================================
 class SignalQueue:
-    def __init__(self):
+    def __init__(self, min_interval_minutes: int = 10):
         self.signals: Dict[str, Dict] = {}
         self.lock = threading.Lock()
         self.last_posted: Dict[str, datetime] = {}
+        self.min_interval_minutes = min_interval_minutes
 
     def add_signal(self, symbol: str, signal: Dict):
         with self.lock:
@@ -322,7 +323,7 @@ class SignalQueue:
             if symbol not in self.last_posted:
                 return True
             time_since = datetime.now() - self.last_posted[symbol]
-            if time_since < timedelta(minutes=5):
+            if time_since < timedelta(minutes=self.min_interval_minutes):
                 return False
             return True
 
@@ -402,6 +403,18 @@ def candle_complete():
         signal_result = model_manager.generate_signal(symbol, prices, volumes)
 
         if signal_result.get('signal_type') != 'WAIT':
+            # Check risk limits BEFORE recording the signal
+            allowed, risk_reason = risk_manager.should_allow_signal(symbol, signal_result['signal_type'])
+            if not allowed:
+                logger.info(f"⚠️ Signal blocked by risk manager: {risk_reason}")
+                ws_manager.broadcast_signal(symbol, signal_result)
+                return jsonify({
+                    'status': 'risk_limited',
+                    'symbol': symbol,
+                    'reason': risk_reason,
+                    'signal_type': signal_result.get('signal_type')
+                }), 200
+            
             risk_manager.record_signal(symbol, signal_result['signal_type'], 
                                       signal_result.get('confidence', 0.0))
 
@@ -487,7 +500,10 @@ def check_news_before_trade() -> tuple:
         return True, 'News check unreachable, proceeding'
 
 def post_to_mt5(symbol: str, signal: Dict, signal_id: Optional[str] = None):
-    """Post signal to MT5 backend."""
+    """Post signal to MT5 backend with retry logic for rate limiting."""
+    max_retries = 3
+    base_delay = 2  # seconds
+    
     try:
         signal_type = signal.get('signal_type', 'WAIT')
         if signal_type == 'WAIT':
@@ -506,20 +522,45 @@ def post_to_mt5(symbol: str, signal: Dict, signal_id: Optional[str] = None):
             "timeframe": "1h"
         }
 
-        response = requests.post(
-            f"{COMMUNITY_TRADING_URL}/api/signal",
-            json=payload,
-            headers={"X-API-Key": COMMUNITY_API_KEY, "Content-Type": "application/json"},
-            timeout=10
-        )
+        for attempt in range(max_retries):
+            response = requests.post(
+                f"{COMMUNITY_TRADING_URL}/api/signal",
+                json=payload,
+                headers={"X-API-Key": COMMUNITY_API_KEY, "Content-Type": "application/json"},
+                timeout=10
+            )
 
-        if response.status_code == 200:
-            if signal_id:
-                signal_queue.mark_posted(signal_id)
-            logger.info(f"✅ Signal posted to MT5: {symbol} {signal_type}")
-        else:
-            logger.error(f"❌ MT5 error: {response.status_code}")
+            if response.status_code == 200:
+                if signal_id:
+                    signal_queue.mark_posted(signal_id)
+                logger.info(f"✅ Signal posted to MT5: {symbol} {signal_type}")
+                return
+            
+            elif response.status_code == 429:
+                # Rate limited - extract retry-after header or use exponential backoff
+                retry_after = response.headers.get('Retry-After')
+                if retry_after:
+                    wait_time = int(retry_after)
+                else:
+                    # Exponential backoff: 2s, 4s, 8s...
+                    wait_time = base_delay * (2 ** attempt)
+                
+                logger.warning(f"⚠️ Rate limited (429). Waiting {wait_time}s before retry {attempt + 1}/{max_retries}")
+                time.sleep(wait_time)
+                
+                # On last retry, don't continue
+                if attempt == max_retries - 1:
+                    logger.error(f"❌ MT5 error: 429 Too Many Requests (after {max_retries} retries)")
+                    return
+                    
+            else:
+                logger.error(f"❌ MT5 error: {response.status_code}")
+                return
 
+    except requests.exceptions.Timeout:
+        logger.error(f"❌ Error posting to MT5: Request timeout")
+    except requests.exceptions.RequestException as e:
+        logger.error(f"❌ Error posting to MT5: {e}")
     except Exception as e:
         logger.error(f"❌ Error posting to MT5: {e}")
 

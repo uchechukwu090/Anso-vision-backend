@@ -1,9 +1,29 @@
-__pycache__/
-unknown/
+```
+# Dependencies
 .venv/
+
+# Compiled/Executable files
+*.exe
+*.dll
+*.so
 *.pyc
-*.pkl
+__pycache__/
+
+# Logs and temp files
 *.log
+*.tmp
+
+# Environment
 .env
+.env.local
+.env.*
+
+# Editors
 .vscode/
-.git/
+.idea/
+
+# Build artifacts
+build/
+dist/
+target/
+```
