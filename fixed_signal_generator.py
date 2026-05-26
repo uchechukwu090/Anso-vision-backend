@@ -263,6 +263,13 @@ class FixedSignalGenerator:
                                          signals['breakout'], signals['volume'], 
                                          signals['price_action']] if s == 'BUY']
             confidence = np.mean(conf_list) if conf_list else 0.5
+            
+            # CRITICAL FIX: Filter by confidence threshold
+            if confidence < self.confidence_threshold:
+                return self._wait(
+                    f"Confidence {confidence:.2f} below threshold {self.confidence_threshold}"
+                )
+            
             reasoning = f"BUY: {buy_votes}/5 factors align | Regime: {regime}"
 
         elif (sell_votes >= 2 or strong_breakout_sell or strong_mr_sell) and \
@@ -272,6 +279,13 @@ class FixedSignalGenerator:
                                          signals['breakout'], signals['volume'], 
                                          signals['price_action']] if s == 'SELL']
             confidence = np.mean(conf_list) if conf_list else 0.5
+            
+            # CRITICAL FIX: Filter by confidence threshold
+            if confidence < self.confidence_threshold:
+                return self._wait(
+                    f"Confidence {confidence:.2f} below threshold {self.confidence_threshold}"
+                )
+            
             reasoning = f"SELL: {sell_votes}/5 factors align | Regime: {regime}"
 
         else:
